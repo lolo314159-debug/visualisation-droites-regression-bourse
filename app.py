@@ -67,21 +67,23 @@ def get_metrics(prices_series):
     vol_10y = calc_vol(prices[-2520:]) if len(prices) > 2520 else vol_hist
     return {"r2": r2, "cagr": cagr, "vol_hist": vol_hist, "vol_10y": vol_10y, "y_pred": y_pred_log, "prices": prices}
 
-# --- 3. INTERFACE ---
+# --- 3. INTERFACE AVEC FILTRES PAR INTERVALLES ---
 st.sidebar.title("⚙️ Paramètres")
 cat = st.sidebar.radio("Catégorie", ["Continentaux", "Par Pays"])
 idx_list = ["EURO STOXX 50", "STOXX Europe 600"] if cat == "Continentaux" else ["CAC 40 (France)", "DAX 40 (Allemagne)", "FTSE 100 (UK)", "SMI 20 (Suisse)", "AEX (Pays-Bas)", "IBEX 35 (Espagne)", "BEL 20 (Belgique)"]
 idx_choice = st.sidebar.selectbox("Indice", idx_list)
 
-r2_range = st.sidebar.slider("Intervalle R²", 0.0, 1.0, (0.85, 1.00), 0.01)
-pos_range = st.sidebar.slider("Position / Droite (%)", -100, 100, (-100, 100), 5)
+# NOUVEAUX FILTRES PAR INTERVALLE
+r2_range = st.sidebar.slider("Intervalle R² (Fiabilité)", 0.0, 1.0, (0.85, 1.00), 0.01)
+pos_range = st.sidebar.slider("Intervalle Position / Droite (%)", -100, 100, (-100, 100), 5)
 
 base_stocks = get_index_components(idx_choice)
 if base_stocks is None: st.stop()
 
 @st.cache_data(ttl=3600)
-def get_filtered_results(stocks_dict, r2_bounds, pos_bounds):
+def get_strictly_filtered_list(stocks_dict, r2_bounds, pos_bounds):
     tickers = list(stocks_dict.values())
+    # Download 1wk pour le scan rapide
     data = yf.download(tickers, start="2000-01-01", interval="1wk", progress=False)['Close']
     results = []
     for name, ticker in stocks_dict.items():
@@ -89,18 +91,22 @@ def get_filtered_results(stocks_dict, r2_bounds, pos_bounds):
             stats = get_metrics(data[ticker])
             if stats:
                 r2_val = round(stats["r2"], 4)
-                curr_p = stats["prices"][-1]
-                theo_p = np.exp(stats["y_pred"][-1])
-                pos_val = ((curr_p / theo_p) - 1) * 100
+                curr_price = stats["prices"][-1]
+                theo_price = np.exp(stats["y_pred"][-1])
+                pos_val = ((curr_price / theo_price) - 1) * 100
+                
+                # Vérification des deux intervalles
                 if (r2_bounds[0] <= r2_val <= r2_bounds[1]) and (pos_bounds[0] <= pos_val <= pos_bounds[1]):
                     results.append({"name": name, "r2": r2_val})
-    return sorted(results, key=lambda x: x['r2'], reverse=True)
+    return [item['name'] for item in sorted(results, key=lambda x: x['r2'], reverse=True)]
 
-filtered_data = get_filtered_results(base_stocks, r2_range, pos_range)
-filtered_names = [item['name'] for item in filtered_data]
+with st.sidebar:
+    st.write("---")
+    with st.spinner("Filtrage multicritères..."):
+        filtered_names = get_strictly_filtered_list(base_stocks, r2_range, pos_range)
 
 if not filtered_names:
-    st.sidebar.warning("Aucun résultat.")
+    st.sidebar.warning("Aucune valeur trouvée pour ces critères.")
     st.stop()
 
 selected_stock = st.sidebar.selectbox(f"Valeurs ({len(filtered_names)})", filtered_names)
@@ -112,11 +118,8 @@ if isinstance(df_full, pd.DataFrame): df_full = df_full.iloc[:, 0]
 res = get_metrics(df_full)
 
 if res:
-    # Calculs précis
     std_dev = np.std(np.log(res["prices"]) - res["y_pred"])
     curr, theo = res["prices"][-1], np.exp(res["y_pred"][-1])
-    z_score = (np.log(curr) - np.log(theo)) / std_dev
-    
     s1_u, s1_d = np.exp(res["y_pred"][-1] + std_dev), np.exp(res["y_pred"][-1] - std_dev)
     s2_u, s2_d = np.exp(res["y_pred"][-1] + 2*std_dev), np.exp(res["y_pred"][-1] - 2*std_dev)
     
@@ -127,61 +130,75 @@ if res:
     m2.metric("Vol. 10 ans", f"{res['vol_10y']:.1f}%")
     m3.metric("Vol. 25 ans", f"{res['vol_hist']:.1f}%")
     m4.metric("Fiabilité (R²)", f"{res['r2']:.4f}")
-    m5.metric("Z-Score (Sigma)", f"{z_score:+.2f}")
+    m5.metric("Position / Moy.", f"{((curr/theo)-1)*100:+.1f}%")
 
-    # --- GUIDE D'INTERPRÉTATION PRÉCIS ---
-    with st.expander("🔍 ANALYSE DE PRÉCISION STATISTIQUE", expanded=True):
+# SECTION INTERPRÉTATION DÉTAILLÉE ET ANALYSE PRÉCISE
+    with st.expander("🔍 ANALYSE STRATÉGIQUE DÉTAILLÉE", expanded=True):
         col_a, col_b = st.columns(2)
+        
         with col_a:
-            st.markdown("### 🎯 Localisation dans le Canal")
-            if abs(z_score) <= 0.25:
-                st.info(f"⚖️ **Équilibre Parfait** (Z-Score: {z_score:+.2f})")
-                st.write("Le prix est quasi identique à sa valeur théorique. Aucun avantage statistique directionnel. Zone idéale pour du DCA.")
-            elif 0.25 < z_score <= 1.0:
-                st.warning(f"📈 **Légère Tension** (Z-Score: {z_score:+.2f})")
-                st.write("Le titre est 'bien payé' mais reste dans sa zone de fluctuation habituelle.")
-            elif 1.0 < z_score <= 1.8:
-                st.warning(f"🟠 **Résistance 1σ** (Z-Score: {z_score:+.2f})")
-                st.write("Le titre entre dans les 15% des prix les plus chers. Le risque de respiration vers la droite dorée est important.")
-            elif z_score > 1.8:
-                st.error(f"🔥 **Excès de Confiance (+2σ)** (Z-Score: {z_score:+.2f})")
-                st.write("Zone d'euphorie. Un retour à la moyenne est probable à 95%.")
-            elif -1.0 <= z_score < -0.25:
-                st.success(f"📉 **Légère Décote** (Z-Score: {z_score:+.2f})")
-                st.write("L'action glisse sous sa moyenne. Opportunité de renforcement serein.")
-            elif -1.8 <= z_score < -1.0:
-                st.success(f"🟢 **Opportunité 1σ** (Z-Score: {z_score:+.2f})")
-                st.write("L'action est nettement attractive (moins chère que 84% de son historique relatif).")
-            elif z_score < -1.8:
-                st.error(f"🚨 **Anomalie de Marché (-2σ)** (Z-Score: {z_score:+.2f})")
-                st.write("Zone de peur irrationnelle. Force de rappel vers la droite dorée maximale.")
+            st.markdown("### 📊 Qualité de la Tendance")
+            r2_val = res['r2']
+            if r2_val > 0.98:
+                st.success(f"**Score : {r2_val:.4f} - Modèle 'Horloge Suisse'**")
+                st.write("L'action est d'une régularité absolue. Les écarts à la moyenne sont historiquement très brefs. C'est un profil idéal pour de l'investissement programmé (DCA).")
+            elif r2_val > 0.93:
+                st.success(f"**Score : {r2_val:.4f} - Tendance Structurelle**")
+                st.write("La croissance est solide et prévisible. Le marché respecte très bien le canal de régression. Les signaux σ (Sigma) sont ici très fiables.")
+            elif r2_val > 0.85:
+                st.info(f"**Score : {r2_val:.4f} - Tendance Validée**")
+                st.write("La trajectoire est ascendante mais sujette à des cycles économiques visibles. Attendre impérativement les supports pour entrer.")
+            else:
+                st.warning(f"**Score : {r2_val:.4f} - Tendance Instable**")
+                st.write("La fiabilité statistique est plus faible. Ne pas accorder une confiance aveugle aux objectifs de prix hauts/bas.")
+
+            st.markdown("---")
+            st.markdown("### ⚡ Profil de Risque (Volatilité)")
+            v10, v25 = res['vol_10y'], res['vol_hist']
+            if v10 < v25 * 0.8:
+                st.write(f"✅ **Assagissement** : La volatilité actuelle ({v10:.1f}%) est bien inférieure à la moyenne historique ({v25:.1f}%). Le titre devient 'Bon Père de Famille'.")
+            elif v10 > v25 * 1.2:
+                st.error(f"⚠️ **Nervosité Accrue** : Le titre est beaucoup plus instable ces dernières années ({v10:.1f}%) qu'historiquement. Risque de décrochage brutal.")
+            else:
+                st.write(f"⚖️ **Risque Constant** : La volatilité est stable autour de {v10:.1f}%. Pas de changement de comportement majeur.")
 
         with col_b:
-            st.markdown("### 🧭 Stratégie & Potentiel")
-            st.write(f"• **Performance annuelle (CAGR) :** {res['cagr']:.2f}%")
-            st.write(f"• **Doublement capital :** ~{72/max(res['cagr'], 1):.1f} ans")
-            st.markdown("---")
-            if abs(z_score) > 1.5:
-                st.markdown("**⚠️ Action Requise :** Le prix touche les bords du canal. Envisager un arbitrage (achat ou vente selon le côté).")
+            st.markdown("### 🎯 Diagnostic de Prix & Timing")
+            pos_moy = ((curr/theo)-1)*100
+            
+            if curr <= s2_d:
+                st.error(f"🚨 **ACHAT FORT (Zone de Capitulation)**")
+                st.write(f"Le cours est à {pos_moy:.1f}% de sa moyenne. Statistiquement, le titre est survendu. C'est une zone de rebond historique (95% de probabilité de retour vers le haut).")
+            elif curr <= s1_d:
+                st.success(f"📉 **OPPORTUNITÉ D'ACHAT (Zone de Décote)**")
+                st.write(f"Le cours est sous sa tendance centrale. Le potentiel de hausse pour rejoindre la moyenne est de {abs(pos_moy):.1f}%. Risque de baisse limité.")
+            elif curr >= s2_u:
+                st.error(f"🔥 **VENTE FORTE (Zone d'Euphorie)**")
+                st.write(f"Le titre est en surchauffe totale (+{pos_moy:.1f}% vs moyenne). La probabilité d'une correction imminente vers la droite dorée est de 95%.")
+            elif curr >= s1_u:
+                st.warning(f"🟠 **PRUDENCE (Zone de Tension)**")
+                st.write(f"L'action est chère. Elle se situe en haut de son canal habituel. Un retour vers {theo:.2f} € est probable avant toute nouvelle hausse.")
             else:
-                st.markdown("**😴 Action Requise :** 'Wait and See'. Le titre est dans son bruit de marché normal.")
+                st.info(f"⚪ **ZONE NEUTRE (Prix d'Équilibre)**")
+                st.write(f"Le prix actuel est proche de sa valeur théorique ({theo:.2f} €). Le marché est à l'équilibre, il n'y a pas d'avantage statistique à l'achat ou à la vente ici.")
 
-    # --- GRAPHIQUES ---
-    tab1, tab2 = st.tabs(["📉 Vue Logarithmique", "📈 Vue Linéaire"])
+            st.markdown("---")
+            st.markdown("### 📈 Potentiel CAGR")
+            st.write(f"Si l'action maintient sa tendance de fond, elle génère **{res['cagr']:.2f}%** par an en moyenne. À ce rythme, un capital double tous les **{72/res['cagr']:.1f} ans**.")
+
+    # GRAPHIQUES HARMONISÉS
+    tab1, tab2 = st.tabs(["📉 Logarithmique", "📈 Linéaire"])
     def create_plot(is_log):
         fig = go.Figure()
         dates, yp = df_full.index, res["y_pred"]
-        c2_f, c1_f = 'rgba(255, 215, 0, 0.05)', 'rgba(255, 215, 0, 0.15)'
-        line_s = dict(color='rgba(255, 215, 0, 0.2)', width=0.8)
-
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + 2*std_dev), line=line_s, showlegend=False))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - 2*std_dev), fill='tonexty', fillcolor=c2_f, line=line_s, name="Zone 95% (2σ)"))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + std_dev), line=line_s, showlegend=False))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - std_dev), fill='tonexty', fillcolor=c1_f, line=line_s, name="Zone 68% (1σ)"))
-        
+        c2_fill, c1_fill = 'rgba(255, 215, 0, 0.05)', 'rgba(255, 215, 0, 0.15)'
+        line_style = dict(color='rgba(255, 215, 0, 0.2)', width=0.5)
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + 2*std_dev), line=line_style, showlegend=False))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - 2*std_dev), fill='tonexty', fillcolor=c2_fill, line=line_style, name="2σ"))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + std_dev), line=line_style, showlegend=False))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - std_dev), fill='tonexty', fillcolor=c1_fill, line=line_style, name="1σ"))
         fig.add_trace(go.Scatter(x=dates, y=res["prices"], name="Prix", line=dict(color='#00D4FF', width=1.8)))
         fig.add_trace(go.Scatter(x=dates, y=np.exp(yp), name="Trend", line=dict(color='gold', width=2, dash='dash')))
-        
         fig.update_layout(template="plotly_dark", height=450, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
         return fig
     
@@ -193,6 +210,6 @@ if res:
     t = st.columns(5)
     t[0].metric("Support -2σ", f"{s2_d:.2f} €")
     t[1].metric("Support -1σ", f"{s1_d:.2f} €")
-    t[2].metric("PRIX THÉORIQUE", f"{theo:.2f} €")
+    t[2].metric("THÉORIQUE", f"{theo:.2f} €")
     t[3].metric("Résistance +1σ", f"{s1_u:.2f} €")
     t[4].metric("Résistance +2σ", f"{s2_u:.2f} €")
