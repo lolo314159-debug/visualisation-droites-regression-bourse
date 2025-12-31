@@ -55,20 +55,32 @@ if not data.empty:
     # Calcul des métriques
     r2 = model.score(X, y)
     
-    
-# Calcul du CAGR sécurisé
+# --- CALCUL DU CAGR SÉCURISÉ ---
     try:
         start_price = float(data['Close'].iloc[0])
         end_price = float(data['Close'].iloc[-1])
+        # Calcul du nombre d'années réelles de données
         num_years = (data.index[-1] - data.index[0]).days / 365.25
         
         if start_price > 0 and num_years > 0:
             cagr = (pow(end_price / start_price, 1 / num_years) - 1) * 100
         else:
             cagr = 0.0
-    except:
+    except Exception:
         cagr = 0.0
 
+    # --- AFFICHAGE DES MÉTRIQUES ---
+    col1, col2, col3 = st.columns(3)
+    
+    # Sécurité supplémentaire pour l'affichage du CAGR
+    if np.isnan(cagr) or np.isinf(cagr):
+        col1.metric("CAGR (%)", "N/A")
+    else:
+        col1.metric("CAGR (%)", f"{cagr:.2f}%")
+        
+    col2.metric("R² (Fiabilité)", f"{r2:.4f}")
+    col3.metric("Prix Actuel", f"{end_price:.2f} €")
+    
     # Affichage des statistiques (avec sécurité sur l'affichage)
     col1, col2, col3 = st.columns(3)
     col1.metric("CAGR (%)", f"{cagr:.2f}%" if not np.isnan(cagr) else "N/A")
