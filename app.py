@@ -153,17 +153,38 @@ if res:
 
     # Graphiques
     tab1, tab2 = st.tabs(["📉 Vue Logarithmique (Tendance)", "📈 Vue Linéaire (Réalité)"])
+    
     def create_plot(is_log):
         fig = go.Figure()
-        d, yp = df.index, res["y_pred"]
-        fig.add_trace(go.Scatter(x=d, y=np.exp(yp+2*std_dev), line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=d, y=np.exp(yp-2*std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.05)', name="Zone 95% (2σ)"))
-        fig.add_trace(go.Scatter(x=d, y=np.exp(yp+std_dev), line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=d, y=np.exp(yp-std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.15)', name="Zone 68% (1σ)"))
-        fig.add_trace(go.Scatter(x=d, y=res["prices"], name="Prix Réel", line=dict(color='#00D4FF', width=1.5)))
-        fig.add_trace(go.Scatter(x=d, y=np.exp(yp), name="Droite de Régression", line=dict(color='gold', dash='dash')))
-        fig.update_layout(template="plotly_dark", height=450, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
-        return fig
+        dates, y_trend = df_full.index, np.exp(y_pred_log)
+        
+        # Couleurs harmonisées
+        color_2sigma = 'rgba(255, 215, 0, 0.05)' # Jaune très transparent
+        color_1sigma = 'rgba(255, 215, 0, 0.15)' # Jaune plus marqué
+        line_color = 'rgba(255, 215, 0, 0.3)'   # Ligne dorée subtile
+        
+        # Zone 95% (2 Sigma)
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + 2*std_dev), line=dict(color=line_color, width=0.5), showlegend=False))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - 2*std_dev), fill='tonexty', fillcolor=color_2sigma, line=dict(color=line_color, width=0.5), name="Zone 95% (2σ)"))
+        
+        # Zone 68% (1 Sigma)
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + std_dev), line=dict(color=line_color, width=0.8), showlegend=False))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - std_dev), fill='tonexty', fillcolor=color_1sigma, line=dict(color=line_color, width=0.8), name="Zone 68% (1σ)"))
+        
+        # Prix Réel
+        fig.add_trace(go.Scatter(x=dates, y=res["prices"], name="Prix Réel", line=dict(color='#00D4FF', width=1.8)))
+        
+        # Droite de Régression (Centrale)
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp), name="Tendance Centrale", line=dict(color='gold', width=2, dash='dash')))
+        
+        fig.update_layout(
+            template="plotly_dark", 
+            height=450, 
+            yaxis_type="log" if is_log else "linear", 
+            margin=dict(l=0,r=0,t=10,b=0), 
+            legend=dict(orientation="h", y=-0.15)
+        )
+    return fig
     
     tab1.plotly_chart(create_plot(True), use_container_width=True)
     tab2.plotly_chart(create_plot(False), use_container_width=True)
