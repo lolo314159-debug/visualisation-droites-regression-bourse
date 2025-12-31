@@ -80,7 +80,7 @@ base_stocks = get_index_components(idx_choice)
 if base_stocks is None: st.stop()
 
 @st.cache_data(ttl=3600)
-def get_strictly_filtered_list(stocks_dict, r2_bounds, pos_bounds):
+def get_filtered_results(stocks_dict, r2_bounds, pos_bounds):
     tickers = list(stocks_dict.values())
     data = yf.download(tickers, start="2000-01-01", interval="1wk", progress=False)['Close']
     results = []
@@ -94,9 +94,11 @@ def get_strictly_filtered_list(stocks_dict, r2_bounds, pos_bounds):
                 pos_val = ((curr_p / theo_p) - 1) * 100
                 if (r2_bounds[0] <= r2_val <= r2_bounds[1]) and (pos_bounds[0] <= pos_val <= pos_bounds[1]):
                     results.append({"name": name, "r2": r2_val})
-    return [item['name'] for item in sorted(results, key=lambda x: x['r2'], reverse=True)]
+    return sorted(results, key=lambda x: x['r2'], reverse=True)
 
-filtered_names = get_strictly_filtered_list(base_stocks, r2_range, pos_range)
+filtered_data = get_filtered_results(base_stocks, r2_range, pos_range)
+filtered_names = [item['name'] for item in filtered_data]
+
 if not filtered_names:
     st.sidebar.warning("Aucun résultat.")
     st.stop()
@@ -110,9 +112,8 @@ if isinstance(df_full, pd.DataFrame): df_full = df_full.iloc[:, 0]
 res = get_metrics(df_full)
 
 if res:
-    # Calcul des zones et Z-Score
-    log_prices = np.log(res["prices"])
-    std_dev = np.std(log_prices - res["y_pred"])
+    # Calculs précis
+    std_dev = np.std(np.log(res["prices"]) - res["y_pred"])
     curr, theo = res["prices"][-1], np.exp(res["y_pred"][-1])
     z_score = (np.log(curr) - np.log(theo)) / std_dev
     
@@ -128,55 +129,55 @@ if res:
     m4.metric("Fiabilité (R²)", f"{res['r2']:.4f}")
     m5.metric("Z-Score (Sigma)", f"{z_score:+.2f}")
 
-    # --- NOUVEAU GUIDE D'INTERPRÉTATION PRÉCIS ---
+    # --- GUIDE D'INTERPRÉTATION PRÉCIS ---
     with st.expander("🔍 ANALYSE DE PRÉCISION STATISTIQUE", expanded=True):
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown("### 🎯 Localisation dans le Canal")
             if abs(z_score) <= 0.25:
                 st.info(f"⚖️ **Équilibre Parfait** (Z-Score: {z_score:+.2f})")
-                st.write("Le prix est 'collé' à sa droite de régression. C'est la valeur fondamentale théorique. Aucun avantage statistique à l'achat ou à la vente. Idéal pour du DCA.")
+                st.write("Le prix est quasi identique à sa valeur théorique. Aucun avantage statistique directionnel. Zone idéale pour du DCA.")
             elif 0.25 < z_score <= 1.0:
                 st.warning(f"📈 **Légère Tension** (Z-Score: {z_score:+.2f})")
-                st.write("Le titre est 'bien payé'. On s'approche du 1 Sigma haut. Ce n'est pas encore une alerte, mais le potentiel de hausse immédiat se réduit.")
+                st.write("Le titre est 'bien payé' mais reste dans sa zone de fluctuation habituelle.")
             elif 1.0 < z_score <= 1.8:
-                st.warning(f"🟠 **Zone de Résistance 1σ** (Z-Score: {z_score:+.2f})")
-                st.write("Le titre entre dans les 15% des prix les plus chers. Le risque de stagnation ou de respiration vers la droite dorée est important.")
+                st.warning(f"🟠 **Résistance 1σ** (Z-Score: {z_score:+.2f})")
+                st.write("Le titre entre dans les 15% des prix les plus chers. Le risque de respiration vers la droite dorée est important.")
             elif z_score > 1.8:
                 st.error(f"🔥 **Excès de Confiance (+2σ)** (Z-Score: {z_score:+.2f})")
-                st.write("Zone d'euphorie. Statistiquement, le titre est dans une impasse de croissance court terme. Un retour à la moyenne est probable (95% de probabilité).")
+                st.write("Zone d'euphorie. Un retour à la moyenne est probable à 95%.")
             elif -1.0 <= z_score < -0.25:
                 st.success(f"📉 **Légère Décote** (Z-Score: {z_score:+.2f})")
-                st.write("Le titre glisse sous sa moyenne. C'est souvent le moment idéal pour renforcer sereinement sans attendre une crise majeure.")
+                st.write("L'action glisse sous sa moyenne. Opportunité de renforcement serein.")
             elif -1.8 <= z_score < -1.0:
                 st.success(f"🟢 **Opportunité 1σ** (Z-Score: {z_score:+.2f})")
-                st.write("L'action est nettement attractive. Elle est moins chère que 84% de son historique relatif. Très bon ratio rendement/risque.")
+                st.write("L'action est nettement attractive (moins chère que 84% de son historique relatif).")
             elif z_score < -1.8:
                 st.error(f"🚨 **Anomalie de Marché (-2σ)** (Z-Score: {z_score:+.2f})")
-                st.write("Zone de capitulation ou de peur irrationnelle. C'est ici que se font les meilleures performances long terme. Force de rappel maximale.")
+                st.write("Zone de peur irrationnelle. Force de rappel vers la droite dorée maximale.")
 
         with col_b:
             st.markdown("### 🧭 Stratégie & Potentiel")
-            st.write(f"• **Performance annuelle moyenne (CAGR) :** {res['cagr']:.2f}%")
-            st.write(f"• **Vitesse de doublement :** ~{72/max(res['cagr'], 0.1):.1f} ans")
+            st.write(f"• **Performance annuelle (CAGR) :** {res['cagr']:.2f}%")
+            st.write(f"• **Doublement capital :** ~{72/max(res['cagr'], 1):.1f} ans")
             st.markdown("---")
             if abs(z_score) > 1.5:
-                st.markdown("**⚠️ Action Requise :** Le prix est aux extrémités du canal. Envisager des prises de profits (si haut) ou des achats massifs (si bas).")
+                st.markdown("**⚠️ Action Requise :** Le prix touche les bords du canal. Envisager un arbitrage (achat ou vente selon le côté).")
             else:
-                st.markdown("**😴 Action Requise :** 'Wait and See'. Le prix est dans sa zone de fluctuation normale.")
+                st.markdown("**😴 Action Requise :** 'Wait and See'. Le titre est dans son bruit de marché normal.")
 
     # --- GRAPHIQUES ---
     tab1, tab2 = st.tabs(["📉 Vue Logarithmique", "📈 Vue Linéaire"])
     def create_plot(is_log):
         fig = go.Figure()
         dates, yp = df_full.index, res["y_pred"]
-        c2_fill, c1_fill = 'rgba(255, 215, 0, 0.05)', 'rgba(255, 215, 0, 0.15)'
-        line_style = dict(color='rgba(255, 215, 0, 0.2)', width=0.8)
+        c2_f, c1_f = 'rgba(255, 215, 0, 0.05)', 'rgba(255, 215, 0, 0.15)'
+        line_s = dict(color='rgba(255, 215, 0, 0.2)', width=0.8)
 
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + 2*std_dev), line=line_style, showlegend=False))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - 2*std_dev), fill='tonexty', fillcolor=c2_fill, line=line_style, name="Zone 95% (2σ)"))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + std_dev), line=line_style, showlegend=False))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - std_dev), fill='tonexty', fillcolor=c1_fill, line=line_style, name="Zone 68% (1σ)"))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + 2*std_dev), line=line_s, showlegend=False))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - 2*std_dev), fill='tonexty', fillcolor=c2_f, line=line_s, name="Zone 95% (2σ)"))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + std_dev), line=line_s, showlegend=False))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - std_dev), fill='tonexty', fillcolor=c1_f, line=line_s, name="Zone 68% (1σ)"))
         
         fig.add_trace(go.Scatter(x=dates, y=res["prices"], name="Prix", line=dict(color='#00D4FF', width=1.8)))
         fig.add_trace(go.Scatter(x=dates, y=np.exp(yp), name="Trend", line=dict(color='gold', width=2, dash='dash')))
@@ -187,7 +188,7 @@ if res:
     tab1.plotly_chart(create_plot(True), use_container_width=True)
     tab2.plotly_chart(create_plot(False), use_container_width=True)
 
-    # Niveaux de prix metrics
+    # Niveaux de prix
     st.markdown("---")
     t = st.columns(5)
     t[0].metric("Support -2σ", f"{s2_d:.2f} €")
