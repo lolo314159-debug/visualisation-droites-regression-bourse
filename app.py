@@ -41,15 +41,24 @@ def get_index_components(index_name):
 # --- 2. FONCTIONS STATISTIQUES ---
 def get_metrics(prices_series):
     prices = prices_series.dropna().values.astype(float)
-    if len(prices) < 50: return 0.0, 0.0, None
+    if len(prices) < 100: return 0.0, 0.0, 0.0, None
+    
+    # Régression Log-Linéaire
     x = np.arange(len(prices)).reshape(-1, 1)
     y_log = np.log(np.maximum(prices, 0.01))
     model = LinearRegression().fit(x, y_log)
     y_pred_log = model.predict(x).flatten()
     r2 = model.score(x, y_log)
+    
+    # Volatilité Annualisée
     returns = np.diff(y_log)
     vol = np.std(returns) * np.sqrt(252) * 100
-    return r2, vol, y_pred_log
+    
+    # CAGR
+    years = len(prices) / 252
+    cagr = (pow(prices[-1] / prices[0], 1/years) - 1) * 100 if years > 0 else 0
+    
+    return r2, vol, cagr, y_pred_log
 
 def get_r2_interpretation(value):
     if value > 0.95: return "🌟 **Exceptionnelle** : Croissance quasi-parfaite."
@@ -58,23 +67,17 @@ def get_r2_interpretation(value):
     if value > 0.65: return "⚠️ **Moyenne** : Volatilité importante."
     return "❌ **Faible** : Le modèle log-linéaire n'est pas adapté."
 
-# --- 3. INTERFACE ET FILTRAGE ---
-st.sidebar.title("🛠 Stratégie")
-idx_choice = st.sidebar.selectbox("1. Indice", ["CAC 40 (France)", "DAX (Allemagne)", "EURO STOXX 50", "IBEX 35 (Espagne)", "FTSE 100 (UK)"])
-r2_min = st.sidebar.slider("2. R² minimum", 0.0, 1.0, 0.90, 0.01)
-
-base_stocks, bench_ticker = get_index_components(idx_choice)
-
+# --- 3. FILTRAGE IDENTIQUE À L'HISTORIQUE ---
 @st.cache_data(ttl=3600)
-def get_ranked_filtered_list(stocks_dict, r2_threshold):
+def get_strictly_filtered_list(stocks_dict, r2_threshold):
     tickers = list(stocks_dict.values())
-    # Utilisation de 10 ans pour un filtrage précis (ex: Air Liquide vs Pernod)
-    data = yf.download(tickers, period="10y", interval="1wk", progress=False)['Close']
+    # Téléchargement de l'historique COMPLET pour que le filtre soit identique à la droite
+    data = yf.download(tickers, start="2000-01-01", interval="1wk", progress=False)['Close']
     
     results = []
     for name, ticker in stocks_dict.items():
         if ticker in data.columns:
-            r2_val, _, _ = get_metrics(data[ticker])
+            r2_val, _, _, _ = get_metrics(data[ticker])
             if r2_val >= r2_threshold:
                 results.append({"name": name, "r2": r2_val})
     
@@ -82,45 +85,49 @@ def get_ranked_filtered_list(stocks_dict, r2_threshold):
     sorted_results = sorted(results, key=lambda x: x['r2'], reverse=True)
     return [item['name'] for item in sorted_results]
 
+# --- 4. INTERFACE ---
+st.sidebar.title("🛠 Stratégie")
+idx_choice = st.sidebar.selectbox("1. Indice", ["CAC 40 (France)", "DAX (Allemagne)", "EURO STOXX 50", "IBEX 35 (Espagne)", "FTSE 100 (UK)"])
+r2_min = st.sidebar.slider("2. R² minimum (Historique complet)", 0.0, 1.0, 0.90, 0.01)
+
+base_stocks, bench_ticker = get_index_components(idx_choice)
+
 with st.sidebar:
     st.write("---")
-    with st.spinner("Analyse des tendances..."):
-        filtered_names = get_ranked_filtered_list(base_stocks, r2_min)
+    with st.spinner("Analyse complète (depuis 2000)..."):
+        filtered_names = get_strictly_filtered_list(base_stocks, r2_min)
     
     if filtered_names:
-        stock_name = st.selectbox(f"3. Valeurs ({len(filtered_names)})", filtered_names)
+        stock_name = st.selectbox(f"3. Valeurs éligibles ({len(filtered_names)})", filtered_names)
         symbol = base_stocks[stock_name]
     else:
-        st.error("Aucune action trouvée.")
+        st.error("Aucune action ne correspond à ce critère sur l'historique complet.")
         st.stop()
 
-# --- 4. ANALYSE DÉTAILLÉE ---
+# --- 5. ANALYSE DÉTAILLÉE ---
 df_full = yf.download(symbol, start="2000-01-01", progress=False)['Close']
 if isinstance(df_full, pd.DataFrame): df_full = df_full.iloc[:, 0]
 
-r2, vol, y_pred_log = get_metrics(df_full)
+r2, vol, cagr, y_pred_log = get_metrics(df_full)
 std_dev = np.std(np.log(df_full.values) - y_pred_log)
 
-# Données actuelles
 curr = df_full.iloc[-1]
 theo = np.exp(y_pred_log[-1])
 s1_u, s1_d = np.exp(y_pred_log[-1] + std_dev), np.exp(y_pred_log[-1] - std_dev)
 s2_u, s2_d = np.exp(y_pred_log[-1] + 2*std_dev), np.exp(y_pred_log[-1] - 2*std_dev)
 
-# --- 5. AFFICHAGE FINAL ---
+# --- 6. AFFICHAGE ---
 st.title(f"🚀 {stock_name} ({symbol})")
+st.info(f"**Qualité de tendance (R² = {r2:.4f})** : {get_r2_interpretation(r2)}")
 
-# Interprétation R2
-st.info(f"**Qualité du modèle (R² = {r2:.4f})** : {get_r2_interpretation(r2)}")
-
-# Métriques
+# Dashboard Métriques (CAGR en premier)
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Volatilité Ann.", f"{vol:.2f} %")
-m2.metric("Prix Actuel", f"{curr:.2f} €")
-m3.metric("Position / Moyenne", f"{((curr/theo)-1)*100:+.2f}%")
-m4.metric("Score R²", f"{r2:.4f}")
+m1.metric("CAGR (Annuel)", f"{cagr:.2f} %")
+m2.metric("Volatilité Ann.", f"{vol:.2f} %")
+m3.metric("Prix Actuel", f"{curr:.2f} €")
+m4.metric("Position / Moyenne", f"{((curr/theo)-1)*100:+.2f}%")
 
-# Seuils
+# Niveaux Sigma
 st.markdown("### 🎯 Niveaux de valorisation actuels")
 t1, t2, t3, t4, t5 = st.columns(5)
 t1.metric("Support -2σ", f"{s2_d:.2f}")
@@ -129,23 +136,20 @@ t3.metric("PRIX THÉORIQUE", f"{theo:.2f}")
 t4.metric("Résistance +1σ", f"{s1_u:.2f}")
 t5.metric("Résistance +2σ", f"{s2_u:.2f}")
 
-# Onglets Graphiques
-tab1, tab2 = st.tabs(["📉 Échelle Logarithmique (Tendance)", "📈 Échelle Arithmétique (Amplitude)"])
+# Graphiques
+tab1, tab2 = st.tabs(["📉 Échelle Logarithmique", "📈 Échelle Arithmétique"])
 
 def create_plot(is_log):
     fig = go.Figure()
     dates = df_full.index
     y_trend = np.exp(y_pred_log)
-    u1, l1 = np.exp(y_pred_log + std_dev), np.exp(y_pred_log - std_dev)
-    u2, l2 = np.exp(y_pred_log + 2*std_dev), np.exp(y_pred_log - 2*std_dev)
     
     # Bandes Sigma
-    fig.add_trace(go.Scatter(x=dates, y=u2, line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(x=dates, y=l2, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.05)', line=dict(width=0), name="Zone +/- 2σ (95%)"))
-    fig.add_trace(go.Scatter(x=dates, y=u1, line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(x=dates, y=l1, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.15)', line=dict(width=0), name="Zone +/- 1σ (68%)"))
+    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + 2*std_dev), line=dict(width=0), showlegend=False))
+    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.05)', line=dict(width=0), name="Canal 2σ (95%)"))
+    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + std_dev), line=dict(width=0), showlegend=False))
+    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.12)', line=dict(width=0), name="Canal 1σ (68%)"))
     
-    # Prix et Régression
     fig.add_trace(go.Scatter(x=dates, y=df_full.values, name="Cours réel", line=dict(color='#00D4FF', width=2)))
     fig.add_trace(go.Scatter(x=dates, y=y_trend, name="Régression", line=dict(color='gold', width=1.5, dash='dash')))
     
