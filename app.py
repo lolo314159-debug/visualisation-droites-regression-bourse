@@ -34,13 +34,13 @@ def get_index_components(index_name):
             if info["suffix"] and not stocks[name].endswith(info["suffix"]):
                 stocks[name] += info["suffix"]
         return stocks, info["bench"]
-    except Exception as e:
+    except Exception:
         return {"Air Liquide": "AI.PA"}, "^FCHI"
 
 # --- 2. FONCTIONS STATISTIQUES ---
 def get_metrics(prices_series):
     prices = prices_series.dropna().values.astype(float)
-    if len(prices) < 50: return 0.0, 0.0, 0.0, None
+    if len(prices) < 100: return 0.0, 0.0, 0.0, None
     x = np.arange(len(prices)).reshape(-1, 1)
     y_log = np.log(np.maximum(prices, 0.01))
     model = LinearRegression().fit(x, y_log)
@@ -53,11 +53,18 @@ def get_metrics(prices_series):
     return r2, vol, cagr, y_pred_log
 
 def get_r2_interpretation(v):
-    if v > 0.98: return "💎 **Diamant** : Modèle de régularité absolue."
-    if v > 0.93: return "🌟 **Exceptionnel** : Croissance prévisible et stable."
-    if v > 0.85: return "✅ **Très Bon** : Tendance de fond robuste."
-    if v > 0.70: return "⚠️ **Correct** : Présence de cycles ou volatilité."
-    return "❌ **Spéculatif** : Faible corrélation temporelle."
+    if v > 0.98: return "💎 **Diamant**"
+    if v > 0.93: return "🌟 **Exceptionnel**"
+    if v > 0.85: return "✅ **Très Bon**"
+    if v > 0.70: return "⚠️ **Correct**"
+    return "❌ **Spéculatif**"
+
+def get_trading_signal(curr, theo, s1_u, s1_d, s2_u, s2_d):
+    if curr <= s2_d: return "🔵 **ACHAT FORT** : Sous-évaluation extrême (-2σ). Risque statistique minimal.", "blue"
+    if curr <= s1_d: return "🟢 **ACHAT** : Zone de support historique (-1σ). Opportunité d'entrée.", "green"
+    if curr >= s2_u: return "🔴 **VENTE FORTE** : Surévaluation extrême (+2σ). Prise de profit conseillée.", "red"
+    if curr >= s1_u: return "🟠 **ALLÉGEMENT** : Tension haussière (+1σ). Prudence de mise.", "orange"
+    return "⚪ **NEUTRE** : Le prix est proche de sa moyenne long terme.", "gray"
 
 # --- 3. FILTRAGE ET INTERFACE ---
 st.sidebar.title("⚙️ Filtres")
@@ -95,8 +102,16 @@ r2, vol, cagr, y_pred_log = get_metrics(df_full)
 std_dev = np.std(np.log(df_full.values) - y_pred_log)
 curr, theo = df_full.iloc[-1], np.exp(y_pred_log[-1])
 
+# Seuils pour calcul du signal
+s1_u, s1_d = np.exp(y_pred_log[-1] + std_dev), np.exp(y_pred_log[-1] - std_dev)
+s2_u, s2_d = np.exp(y_pred_log[-1] + 2*std_dev), np.exp(y_pred_log[-1] - 2*std_dev)
+signal_text, signal_color = get_trading_signal(curr, theo, s1_u, s1_d, s2_u, s2_d)
+
 # Header Compact
 st.markdown(f"### 📈 {stock_name} ({symbol}) | {get_r2_interpretation(r2)}")
+
+# Signal de trading mis en évidence
+st.markdown(f"**Diagnostic :** {signal_text}")
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("CAGR", f"{cagr:.2f}%")
@@ -112,7 +127,6 @@ def create_plot(is_log):
     y_trend = np.exp(y_pred_log)
     dates = df_full.index
     
-    # Zones Sigma
     fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + 2*std_dev), line=dict(width=0), showlegend=False))
     fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.04)', line=dict(width=0), name="95%"))
     fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + std_dev), line=dict(width=0), showlegend=False))
@@ -121,17 +135,17 @@ def create_plot(is_log):
     fig.add_trace(go.Scatter(x=dates, y=df_full.values, name="Prix", line=dict(color='#00D4FF', width=1.5)))
     fig.add_trace(go.Scatter(x=dates, y=y_trend, name="Trend", line=dict(color='gold', width=1, dash='dash')))
     
-    fig.update_layout(template="plotly_dark", height=450, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
+    fig.update_layout(template="plotly_dark", height=400, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
     return fig
 
 tab1.plotly_chart(create_plot(True), use_container_width=True)
 tab2.plotly_chart(create_plot(False), use_container_width=True)
 
-# Seuils en dessous
+# Seuils compacts en bas
 st.markdown("---")
 t = st.columns(5)
-t[0].caption("Support -2σ"); t[0].write(f"**{np.exp(y_pred_log[-1] - 2*std_dev):.2f}**")
-t[1].caption("Support -1σ"); t[1].write(f"**{np.exp(y_pred_log[-1] - std_dev):.2f}**")
+t[0].caption("Support -2σ"); t[0].write(f"**{s2_d:.2f}**")
+t[1].caption("Support -1σ"); t[1].write(f"**{s1_d:.2f}**")
 t[2].caption("THÉORIQUE"); t[2].write(f"**{theo:.2f}**")
-t[3].caption("Résistance +1σ"); t[3].write(f"**{np.exp(y_pred_log[-1] + std_dev):.2f}**")
-t[4].caption("Résistance +2σ"); t[4].write(f"**{np.exp(y_pred_log[-1] + 2*std_dev):.2f}**")
+t[3].caption("Résistance +1σ"); t[3].write(f"**{s1_u:.2f}**")
+t[4].caption("Résistance +2σ"); t[4].write(f"**{s2_u:.2f}**")
