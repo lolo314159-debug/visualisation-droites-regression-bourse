@@ -67,31 +67,46 @@ def get_metrics(prices_series):
     vol_10y = calc_vol(prices[-2520:]) if len(prices) > 2520 else vol_hist
     return {"r2": r2, "cagr": cagr, "vol_hist": vol_hist, "vol_10y": vol_10y, "y_pred": y_pred_log, "prices": prices}
 
-# --- 3. INTERFACE ---
+# --- 3. INTERFACE AVEC FILTRES PAR INTERVALLES ---
 st.sidebar.title("⚙️ Paramètres")
 cat = st.sidebar.radio("Catégorie", ["Continentaux", "Par Pays"])
 idx_list = ["EURO STOXX 50", "STOXX Europe 600"] if cat == "Continentaux" else ["CAC 40 (France)", "DAX 40 (Allemagne)", "FTSE 100 (UK)", "SMI 20 (Suisse)", "AEX (Pays-Bas)", "IBEX 35 (Espagne)", "BEL 20 (Belgique)"]
 idx_choice = st.sidebar.selectbox("Indice", idx_list)
-r2_min = st.sidebar.slider("R² min (Filtrage)", 0.0, 1.0, 0.90, 0.01)
+
+# NOUVEAUX FILTRES PAR INTERVALLE
+r2_range = st.sidebar.slider("Intervalle R² (Fiabilité)", 0.0, 1.0, (0.85, 1.00), 0.01)
+pos_range = st.sidebar.slider("Intervalle Position / Droite (%)", -100, 100, (-100, 100), 5)
 
 base_stocks = get_index_components(idx_choice)
 if base_stocks is None: st.stop()
 
 @st.cache_data(ttl=3600)
-def get_filtered_list(stocks_dict, r2_threshold):
+def get_strictly_filtered_list(stocks_dict, r2_bounds, pos_bounds):
     tickers = list(stocks_dict.values())
+    # Download 1wk pour le scan rapide
     data = yf.download(tickers, start="2000-01-01", interval="1wk", progress=False)['Close']
     results = []
     for name, ticker in stocks_dict.items():
         if ticker in data.columns:
             stats = get_metrics(data[ticker])
-            if stats and round(stats["r2"], 4) >= r2_threshold:
-                results.append({"name": name, "r2": stats["r2"]})
+            if stats:
+                r2_val = round(stats["r2"], 4)
+                curr_price = stats["prices"][-1]
+                theo_price = np.exp(stats["y_pred"][-1])
+                pos_val = ((curr_price / theo_price) - 1) * 100
+                
+                # Vérification des deux intervalles
+                if (r2_bounds[0] <= r2_val <= r2_bounds[1]) and (pos_bounds[0] <= pos_val <= pos_bounds[1]):
+                    results.append({"name": name, "r2": r2_val})
     return [item['name'] for item in sorted(results, key=lambda x: x['r2'], reverse=True)]
 
-filtered_names = get_filtered_list(base_stocks, r2_min)
+with st.sidebar:
+    st.write("---")
+    with st.spinner("Filtrage multicritères..."):
+        filtered_names = get_strictly_filtered_list(base_stocks, r2_range, pos_range)
+
 if not filtered_names:
-    st.sidebar.warning("Aucun résultat.")
+    st.sidebar.warning("Aucune valeur trouvée pour ces critères.")
     st.stop()
 
 selected_stock = st.sidebar.selectbox(f"Valeurs ({len(filtered_names)})", filtered_names)
@@ -103,7 +118,6 @@ if isinstance(df_full, pd.DataFrame): df_full = df_full.iloc[:, 0]
 res = get_metrics(df_full)
 
 if res:
-    # Calcul des zones sigma
     std_dev = np.std(np.log(res["prices"]) - res["y_pred"])
     curr, theo = res["prices"][-1], np.exp(res["y_pred"][-1])
     s1_u, s1_d = np.exp(res["y_pred"][-1] + std_dev), np.exp(res["y_pred"][-1] - std_dev)
@@ -111,7 +125,6 @@ if res:
     
     st.header(f"🚀 {selected_stock} ({symbol})")
     
-    # Dashboard Métriques
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("CAGR (25 ans)", f"{res['cagr']:.2f}%")
     m2.metric("Vol. 10 ans", f"{res['vol_10y']:.1f}%")
@@ -119,58 +132,44 @@ if res:
     m4.metric("Fiabilité (R²)", f"{res['r2']:.4f}")
     m5.metric("Position / Moy.", f"{((curr/theo)-1)*100:+.1f}%")
 
-    # Guide d'interprétation
-    with st.expander("🔍 Guide d'interprétation des résultats", expanded=True):
+    with st.expander("🔍 Guide d'interprétation", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**Analyse de la Tendance :**")
-            if res['r2'] > 0.95: st.info(f"💎 **Qualité Exceptionnelle** : Précision de {res['r2']*100:.1f}%.")
-            else: st.info("✅ **Bonne Tendance** : Trajectoire long-terme solide.")
-            
-            st.markdown("**Risque :**")
-            if (res['vol_hist'] - res['vol_10y']) > 5: st.success("📉 **Apaisement** : Plus stable récemment.")
-            else: st.write("⚖️ **Stabilité** : Risque constant.")
+            st.markdown("**Analyse :**")
+            if res['r2'] > 0.95: st.info(f"💎 **Diamant** ({res['r2']*100:.1f}%)")
+            else: st.info("✅ **Tendance Solide**")
         with c2:
-            st.markdown("**Diagnostic de Prix :**")
+            st.markdown("**Diagnostic :**")
             if curr <= s2_d: st.error("🔵 **ACHAT FORT** (-2σ)")
             elif curr <= s1_d: st.success("🟢 **ACHAT** (-1σ)")
             elif curr >= s2_u: st.error("🔴 **SURCHAUFFE** (+2σ)")
             elif curr >= s1_u: st.warning("🟠 **TENSION** (+1σ)")
             else: st.info("⚪ **ZONE NEUTRE**")
 
-    # GRAPHIQUES AVEC COULEURS HARMONISÉES
-    tab1, tab2 = st.tabs(["📉 Vue Logarithmique", "📈 Vue Linéaire"])
-    
+    # GRAPHIQUES HARMONISÉS
+    tab1, tab2 = st.tabs(["📉 Logarithmique", "📈 Linéaire"])
     def create_plot(is_log):
         fig = go.Figure()
         dates, yp = df_full.index, res["y_pred"]
-        
-        # Couleurs des zones et lignes (Même teinte)
         c2_fill, c1_fill = 'rgba(255, 215, 0, 0.05)', 'rgba(255, 215, 0, 0.15)'
         line_style = dict(color='rgba(255, 215, 0, 0.2)', width=0.5)
-
-        # Tracé des zones Sigma
         fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + 2*std_dev), line=line_style, showlegend=False))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - 2*std_dev), fill='tonexty', fillcolor=c2_fill, line=line_style, name="Zone 95% (2σ)"))
-        
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - 2*std_dev), fill='tonexty', fillcolor=c2_fill, line=line_style, name="2σ"))
         fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + std_dev), line=line_style, showlegend=False))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - std_dev), fill='tonexty', fillcolor=c1_fill, line=line_style, name="Zone 68% (1σ)"))
-        
-        # Prix et Tendance
-        fig.add_trace(go.Scatter(x=dates, y=res["prices"], name="Prix Réel", line=dict(color='#00D4FF', width=1.8)))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - std_dev), fill='tonexty', fillcolor=c1_fill, line=line_style, name="1σ"))
+        fig.add_trace(go.Scatter(x=dates, y=res["prices"], name="Prix", line=dict(color='#00D4FF', width=1.8)))
         fig.add_trace(go.Scatter(x=dates, y=np.exp(yp), name="Trend", line=dict(color='gold', width=2, dash='dash')))
-        
         fig.update_layout(template="plotly_dark", height=450, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
         return fig
     
     tab1.plotly_chart(create_plot(True), use_container_width=True)
     tab2.plotly_chart(create_plot(False), use_container_width=True)
 
-    # Niveaux de prix metrics
+    # Niveaux de prix
     st.markdown("---")
     t = st.columns(5)
     t[0].metric("Support -2σ", f"{s2_d:.2f} €")
     t[1].metric("Support -1σ", f"{s1_d:.2f} €")
-    t[2].metric("PRIX THÉORIQUE", f"{theo:.2f} €")
+    t[2].metric("THÉORIQUE", f"{theo:.2f} €")
     t[3].metric("Résistance +1σ", f"{s1_u:.2f} €")
     t[4].metric("Résistance +2σ", f"{s2_u:.2f} €")
