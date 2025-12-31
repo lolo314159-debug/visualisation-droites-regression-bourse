@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 import urllib.request
 
-st.set_page_config(page_title="Analyse Boursière Statistique", layout="wide")
+st.set_page_config(page_title="Analyse Statistique Expert", layout="wide")
 
 # --- 1. RÉCUPÉRATION DES COMPOSANTS (WIKIPEDIA) ---
 @st.cache_data(ttl=86400)
@@ -19,7 +19,6 @@ def get_index_components(index_name):
         "IBEX 35 (Espagne)": {"url": "https://en.wikipedia.org/wiki/IBEX_35", "suffix": ".MC", "table_idx": 2, "bench": "^IBEX"},
         "FTSE 100 (UK)": {"url": "https://en.wikipedia.org/wiki/FTSE_100_Index", "suffix": ".L", "table_idx": 4, "bench": "^FTSE"}
     }
-    
     try:
         info = indices[index_name]
         req = urllib.request.Request(info["url"], headers=headers)
@@ -41,7 +40,7 @@ def get_index_components(index_name):
         st.error(f"Erreur Wikipedia : {e}")
         return {"LVMH": "MC.PA"}, "^FCHI"
 
-# --- 2. BARRE LATÉRALE ---
+# --- 2. LOGIQUE ET INTERFACE ---
 st.sidebar.title("🌍 Marchés Européens")
 idx_choice = st.sidebar.selectbox("1. Choisir l'indice", ["CAC 40 (France)", "DAX (Allemagne)", "EURO STOXX 50", "IBEX 35 (Espagne)", "FTSE 100 (UK)"])
 stock_dict, bench_ticker = get_index_components(idx_choice)
@@ -55,7 +54,6 @@ def load_data(s, b):
 
 df_all = load_data(symbol, bench_ticker)
 
-# --- 3. CALCULS ET INTERPRÉTATION ---
 if not df_all.empty and symbol in df_all.columns:
     prices = df_all[symbol].values.astype(float)
     x = np.arange(len(prices)).reshape(-1, 1)
@@ -66,53 +64,57 @@ if not df_all.empty and symbol in df_all.columns:
     r2 = model.score(x, y_log)
     std_dev = np.std(y_log - y_pred_log)
     
-    # Interprétation du R2
-    def get_r2_interpretation(value):
-        if value > 0.90: return "🌟 **Excellente** : L'action suit une croissance exponentielle très régulière."
-        if value > 0.70: return "✅ **Bonne** : La tendance de fond est claire malgré quelques cycles."
-        if value > 0.50: return "⚠️ **Moyenne** : La valeur est assez volatile, la tendance est moins fiable."
-        return "❌ **Faible** : Le cours est trop erratique pour cette analyse."
-
-    st.subheader(f"Analyse : {stock_name} ({symbol})")
+    # --- CALCULS DES VALEURS ACTUELLES ---
+    current_price = prices[-1]
+    theo_price = np.exp(y_pred_log[-1])
+    s1_up, s1_down = np.exp(y_pred_log[-1] + std_dev), np.exp(y_pred_log[-1] - std_dev)
+    s2_up, s2_down = np.exp(y_pred_log[-1] + 2*std_dev), np.exp(y_pred_log[-1] - 2*std_dev)
     
-    # Zone d'interprétation du R2
-    st.info(f"**Fiabilité du modèle (R²) : {r2:.4f}** \n{get_r2_interpretation(r2)}")
+    # Position relative
+    diff_theo = ((current_price / theo_price) - 1) * 100
+    
+    # --- INTERPRÉTATION DU R2 ---
+    def get_r2_text(v):
+        if v > 0.90: return "🌟 **Excellente** : La croissance est extrêmement régulière."
+        if v > 0.75: return "✅ **Bonne** : La tendance de fond est solide."
+        if v > 0.50: return "⚠️ **Moyenne** : Tendance présente mais forte volatilité."
+        return "❌ **Faible** : Modèle peu fiable pour cette action."
 
-    m1, m2, m3 = st.columns(3)
-    years = (df_all.index[-1] - df_all.index[0]).days / 365.25
-    cagr = (pow(prices[-1] / prices[0], 1/years) - 1) * 100
-    m1.metric("CAGR moyen", f"{cagr:.2f}%")
-    m2.metric("Volatilité (Ecart-type)", f"{std_dev:.4f}")
-    m3.metric("Dernier Prix", f"{prices[-1]:.2f} €")
+    # --- AFFICHAGE ---
+    st.title(f"📊 {stock_name}")
+    
+    # Bloc Interprétation
+    st.info(f"**Analyse de fiabilité (R² = {r2:.4f})** : {get_r2_text(r2)}")
 
-    # --- 4. GRAPHIQUES ---
+    # Tableau des seuils et position
+    st.markdown(f"### 🎯 Position actuelle : **{current_price:.2f} €**")
+    t1, t2, t3, t4, t5 = st.columns(5)
+    t1.metric("Support -2σ", f"{s2_down:.2f} €")
+    t2.metric("Support -1σ", f"{s1_down:.2f} €")
+    t3.metric("Prix Théorique", f"{theo_price:.2f} €", f"{diff_theo:+.2f}%")
+    t4.metric("Résistance +1σ", f"{s1_up:.2f} €")
+    t5.metric("Résistance +2σ", f"{s2_up:.2f} €")
+
+    # --- GRAPHIQUES ---
     tab1, tab2 = st.tabs(["📉 Échelle Logarithmique", "📈 Échelle Arithmétique"])
 
     def create_fig(is_log):
         fig = go.Figure()
-        
-        # Calcul des bandes
         y_trend = np.exp(y_pred_log)
         u1, l1 = np.exp(y_pred_log + std_dev), np.exp(y_pred_log - std_dev)
         u2, l2 = np.exp(y_pred_log + 2*std_dev), np.exp(y_pred_log - 2*std_dev)
         
-        # Tracé des zones Sigma
+        # Zones Sigma
         fig.add_trace(go.Scatter(x=df_all.index, y=u2, line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=df_all.index, y=l2, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.05)', line=dict(width=0), name="Bandes +/- 2σ (95%)"))
-        
+        fig.add_trace(go.Scatter(x=df_all.index, y=l2, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.05)', line=dict(width=0), name="+/- 2σ (95% des données)"))
         fig.add_trace(go.Scatter(x=df_all.index, y=u1, line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=df_all.index, y=l1, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.15)', line=dict(width=0), name="Bandes +/- 1σ (68%)"))
+        fig.add_trace(go.Scatter(x=df_all.index, y=l1, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.15)', line=dict(width=0), name="+/- 1σ (68% des données)"))
         
-        # Indice de référence
-        bench_prices = df_all[bench_ticker].values
-        ratio = prices[0] / bench_prices[0]
-        fig.add_trace(go.Scatter(x=df_all.index, y=bench_prices * ratio, name="Indice (normalisé)", line=dict(color='rgba(255,255,255,0.2)', width=1, dash='dot')))
+        # Courbes
+        fig.add_trace(go.Scatter(x=df_all.index, y=prices, name="Cours réel", line=dict(color='#00D4FF', width=2)))
+        fig.add_trace(go.Scatter(x=df_all.index, y=y_trend, name="Moyenne (Régression)", line=dict(color='gold', width=1.5, dash='dash')))
         
-        # Action et Régression
-        fig.add_trace(go.Scatter(x=df_all.index, y=prices, name="Prix Action", line=dict(color='#00D4FF', width=2)))
-        fig.add_trace(go.Scatter(x=df_all.index, y=y_trend, name="Régression", line=dict(color='gold', width=1.5, dash='dash')))
-        
-        fig.update_layout(template="plotly_dark", height=550, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", y=-0.1))
+        fig.update_layout(template="plotly_dark", height=600, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", y=-0.1))
         return fig
 
     tab1.plotly_chart(create_fig(True), use_container_width=True)
