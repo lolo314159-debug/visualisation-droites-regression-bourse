@@ -132,60 +132,56 @@ if res:
     m4.metric("Fiabilité (R²)", f"{res['r2']:.4f}")
     m5.metric("Position / Moy.", f"{((curr/theo)-1)*100:+.1f}%")
 
-# SECTION INTERPRÉTATION DÉTAILLÉE ET ANALYSE PRÉCISE
-    with st.expander("🔍 ANALYSE STRATÉGIQUE DÉTAILLÉE", expanded=True):
+with st.expander("🔍 ANALYSE DE PRÉCISION STATISTIQUE", expanded=True):
         col_a, col_b = st.columns(2)
         
         with col_a:
-            st.markdown("### 📊 Qualité de la Tendance")
-            r2_val = res['r2']
-            if r2_val > 0.98:
-                st.success(f"**Score : {r2_val:.4f} - Modèle 'Horloge Suisse'**")
-                st.write("L'action est d'une régularité absolue. Les écarts à la moyenne sont historiquement très brefs. C'est un profil idéal pour de l'investissement programmé (DCA).")
-            elif r2_val > 0.93:
-                st.success(f"**Score : {r2_val:.4f} - Tendance Structurelle**")
-                st.write("La croissance est solide et prévisible. Le marché respecte très bien le canal de régression. Les signaux σ (Sigma) sont ici très fiables.")
-            elif r2_val > 0.85:
-                st.info(f"**Score : {r2_val:.4f} - Tendance Validée**")
-                st.write("La trajectoire est ascendante mais sujette à des cycles économiques visibles. Attendre impérativement les supports pour entrer.")
-            else:
-                st.warning(f"**Score : {r2_val:.4f} - Tendance Instable**")
-                st.write("La fiabilité statistique est plus faible. Ne pas accorder une confiance aveugle aux objectifs de prix hauts/bas.")
+            st.markdown("### 🎯 Localisation dans le Canal")
+            # Calcul de la distance en nombre de Sigmas (Z-Score)
+            z_score = (np.log(curr) - np.log(theo)) / std_dev
+            
+            if abs(z_score) <= 0.25:
+                st.info(f"⚖️ **Équilibre Parfait** (Z-Score: {z_score:+.2f})")
+                st.write("Le prix est 'collé' à sa droite de régression. C'est la valeur fondamentale pure. Aucun avantage statistique à l'achat ou à la vente. Zone de confort totale.")
+            
+            elif 0.25 < z_score <= 1.0:
+                st.warning(f"📈 **Légère Tension** (Z-Score: {z_score:+.2f})")
+                st.write("On s'approche du 1 Sigma haut. Le titre est 'bien payé'. Ce n'est pas encore une alerte, mais le potentiel de hausse immédiat s'amenuise.")
+                
+            elif 1.0 < z_score <= 1.8:
+                st.warning(f"🟠 **Zone de Résistance 1σ** (Z-Score: {z_score:+.2f})")
+                st.write("Le titre entre dans les 15% des prix les plus chers historiquement. Le risque de stagnation ou de respiration vers la droite dorée est important.")
 
-            st.markdown("---")
-            st.markdown("### ⚡ Profil de Risque (Volatilité)")
-            v10, v25 = res['vol_10y'], res['vol_hist']
-            if v10 < v25 * 0.8:
-                st.write(f"✅ **Assagissement** : La volatilité actuelle ({v10:.1f}%) est bien inférieure à la moyenne historique ({v25:.1f}%). Le titre devient 'Bon Père de Famille'.")
-            elif v10 > v25 * 1.2:
-                st.error(f"⚠️ **Nervosité Accrue** : Le titre est beaucoup plus instable ces dernières années ({v10:.1f}%) qu'historiquement. Risque de décrochage brutal.")
-            else:
-                st.write(f"⚖️ **Risque Constant** : La volatilité est stable autour de {v10:.1f}%. Pas de changement de comportement majeur.")
+            elif z_score > 1.8:
+                st.error(f"🔥 **Excès de Confiance (+2σ)** (Z-Score: {z_score:+.2f})")
+                st.write("Zone d'euphorie. Statistiquement, le titre est dans une impasse de croissance à court terme. Un retour à la moyenne est imminent (95% de certitude statistique).")
+
+            elif -1.0 <= z_score < -0.25:
+                st.success(f"📉 **Légère Décote** (Z-Score: {z_score:+.2f})")
+                st.write("Le titre glisse sous sa moyenne. C'est souvent le moment idéal pour renforcer sereinement sans attendre une crise majeure.")
+
+            elif -1.8 <= z_score < -1.0:
+                st.success(f"🟢 **Opportunité 1σ** (Z-Score: {z_score:+.2f})")
+                st.write("L'action est nettement attractive. Elle est moins chère que 84% de son historique relatif. Très bon ratio rendement/risque.")
+
+            elif z_score < -1.8:
+                st.error(f"🚨 **Anomalie de Marché (-2σ)** (Z-Score: {z_score:+.2f})")
+                st.write("Zone de capitulation ou de peur irrationnelle. C'est ici que se font les meilleures performances à long terme. La force de rappel vers la droite dorée est à son maximum.")
 
         with col_b:
-            st.markdown("### 🎯 Diagnostic de Prix & Timing")
-            pos_moy = ((curr/theo)-1)*100
-            
-            if curr <= s2_d:
-                st.error(f"🚨 **ACHAT FORT (Zone de Capitulation)**")
-                st.write(f"Le cours est à {pos_moy:.1f}% de sa moyenne. Statistiquement, le titre est survendu. C'est une zone de rebond historique (95% de probabilité de retour vers le haut).")
-            elif curr <= s1_d:
-                st.success(f"📉 **OPPORTUNITÉ D'ACHAT (Zone de Décote)**")
-                st.write(f"Le cours est sous sa tendance centrale. Le potentiel de hausse pour rejoindre la moyenne est de {abs(pos_moy):.1f}%. Risque de baisse limité.")
-            elif curr >= s2_u:
-                st.error(f"🔥 **VENTE FORTE (Zone d'Euphorie)**")
-                st.write(f"Le titre est en surchauffe totale (+{pos_moy:.1f}% vs moyenne). La probabilité d'une correction imminente vers la droite dorée est de 95%.")
-            elif curr >= s1_u:
-                st.warning(f"🟠 **PRUDENCE (Zone de Tension)**")
-                st.write(f"L'action est chère. Elle se situe en haut de son canal habituel. Un retour vers {theo:.2f} € est probable avant toute nouvelle hausse.")
+            st.markdown("### 🧭 Stratégie de Gestion")
+            if abs(z_score) > 1.5:
+                st.write("⚠️ **Action Requise :** Le prix est aux extrémités. Envisager des prises de profits (si haut) ou des achats massifs (si bas).")
+            elif abs(z_score) < 0.5:
+                st.write("😴 **Action Requise :** 'Wait and See'. Le prix est à sa juste valeur. Idéal pour du DCA (versements programmés).")
             else:
-                st.info(f"⚪ **ZONE NEUTRE (Prix d'Équilibre)**")
-                st.write(f"Le prix actuel est proche de sa valeur théorique ({theo:.2f} €). Le marché est à l'équilibre, il n'y a pas d'avantage statistique à l'achat ou à la vente ici.")
+                st.write("🧐 **Action Requise :** Surveillance. Le titre cherche sa direction entre sa moyenne et ses bornes.")
 
             st.markdown("---")
-            st.markdown("### 📈 Potentiel CAGR")
-            st.write(f"Si l'action maintient sa tendance de fond, elle génère **{res['cagr']:.2f}%** par an en moyenne. À ce rythme, un capital double tous les **{72/res['cagr']:.1f} ans**.")
-
+            st.markdown("### 📏 Signification des Paliers")
+            st.caption("• Droite centrale : Équilibre de long terme.")
+            st.caption("• Zone 1σ (68%) : Fluctuations normales du business.")
+            st.caption("• Zone 2σ (95%) : Excès psychologiques du marché (Peur/Euphorie).")
     # GRAPHIQUES HARMONISÉS
     tab1, tab2 = st.tabs(["📉 Logarithmique", "📈 Linéaire"])
     def create_plot(is_log):
