@@ -25,10 +25,8 @@ def get_index_components(index_name):
         with urllib.request.urlopen(req) as response:
             all_tables = pd.read_html(response.read())
             df_wiki = all_tables[info["table_idx"]]
-        
         col_ticker = next((c for c in df_wiki.columns if c in ['Ticker', 'EPIC', 'Symbol']), df_wiki.columns[1])
         col_name = next((c for c in df_wiki.columns if c in ['Company', 'Name', 'Constituent']), df_wiki.columns[0])
-        
         stocks = {str(row[col_name]): str(row[col_ticker]).strip().split(':')[-1] for _, row in df_wiki.iterrows()}
         for name in stocks:
             if info["suffix"] and not stocks[name].endswith(info["suffix"]):
@@ -38,19 +36,32 @@ def get_index_components(index_name):
         return {"Air Liquide": "AI.PA"}, "^FCHI"
 
 # --- 2. FONCTIONS STATISTIQUES ---
+def calc_vol(prices_array):
+    returns = np.diff(np.log(np.maximum(prices_array, 0.01)))
+    return np.std(returns) * np.sqrt(252) * 100
+
 def get_metrics(prices_series):
     prices = prices_series.dropna().values.astype(float)
-    if len(prices) < 100: return 0.0, 0.0, 0.0, None
+    if len(prices) < 100: return 0.0, 0.0, 0.0, 0.0, None
+    
+    # Régression
     x = np.arange(len(prices)).reshape(-1, 1)
     y_log = np.log(np.maximum(prices, 0.01))
     model = LinearRegression().fit(x, y_log)
     y_pred_log = model.predict(x).flatten()
     r2 = model.score(x, y_log)
-    returns = np.diff(y_log)
-    vol = np.std(returns) * np.sqrt(252) * 100
+    
+    # CAGR
     years = len(prices) / 252
-    cagr = (pow(prices[-1] / prices[0], 1/years) - 1) * 100 if years > 0 else 0
-    return r2, vol, cagr, y_pred_log
+    cagr = (pow(prices[-1] / prices[0], 1/years) - 1) * 100
+    
+    # Volatilités
+    vol_hist = calc_vol(prices)
+    # Volatilité 10 ans (approx 2520 jours de bourse)
+    prices_10y = prices[-2520:] if len(prices) > 2520 else prices
+    vol_10y = calc_vol(prices_10y)
+    
+    return r2, cagr, vol_hist, vol_10y, y_pred_log
 
 def get_r2_interpretation(v):
     if v > 0.98: return "💎 **Diamant**"
@@ -60,14 +71,14 @@ def get_r2_interpretation(v):
     return "❌ **Spéculatif**"
 
 def get_trading_signal(curr, theo, s1_u, s1_d, s2_u, s2_d):
-    if curr <= s2_d: return "🔵 **ACHAT FORT** : Sous-évaluation extrême (-2σ). Risque statistique minimal.", "blue"
-    if curr <= s1_d: return "🟢 **ACHAT** : Zone de support historique (-1σ). Opportunité d'entrée.", "green"
-    if curr >= s2_u: return "🔴 **VENTE FORTE** : Surévaluation extrême (+2σ). Prise de profit conseillée.", "red"
-    if curr >= s1_u: return "🟠 **ALLÉGEMENT** : Tension haussière (+1σ). Prudence de mise.", "orange"
-    return "⚪ **NEUTRE** : Le prix est proche de sa moyenne long terme.", "gray"
+    if curr <= s2_d: return "🔵 **ACHAT FORT** (-2σ)", "blue"
+    if curr <= s1_d: return "🟢 **ACHAT** (-1σ)", "green"
+    if curr >= s2_u: return "🔴 **VENTE FORTE** (+2σ)", "red"
+    if curr >= s1_u: return "🟠 **ALLÉGEMENT** (+1σ)", "orange"
+    return "⚪ **NEUTRE** (Zone Moyenne)", "gray"
 
 # --- 3. FILTRAGE ET INTERFACE ---
-st.sidebar.title("⚙️ Filtres")
+st.sidebar.title("⚙️ Paramètres")
 idx_choice = st.sidebar.selectbox("Indice", ["CAC 40 (France)", "DAX (Allemagne)", "EURO STOXX 50", "IBEX 35 (Espagne)", "FTSE 100 (UK)"])
 r2_min = st.sidebar.slider("R² min (Historique)", 0.0, 1.0, 0.90, 0.01)
 
@@ -80,7 +91,7 @@ def get_strictly_filtered_list(stocks_dict, r2_threshold):
     results = []
     for name, ticker in stocks_dict.items():
         if ticker in data.columns:
-            r2_val, _, _, _ = get_metrics(data[ticker])
+            r2_val, _, _, _, _ = get_metrics(data[ticker])
             if r2_val >= r2_threshold:
                 results.append({"name": name, "r2": r2_val})
     return [item['name'] for item in sorted(results, key=lambda x: x['r2'], reverse=True)]
@@ -98,50 +109,45 @@ symbol = base_stocks[stock_name]
 df_full = yf.download(symbol, start="2000-01-01", progress=False)['Close']
 if isinstance(df_full, pd.DataFrame): df_full = df_full.iloc[:, 0]
 
-r2, vol, cagr, y_pred_log = get_metrics(df_full)
+r2, cagr, vol_hist, vol_10y, y_pred_log = get_metrics(df_full)
 std_dev = np.std(np.log(df_full.values) - y_pred_log)
 curr, theo = df_full.iloc[-1], np.exp(y_pred_log[-1])
 
-# Seuils pour calcul du signal
 s1_u, s1_d = np.exp(y_pred_log[-1] + std_dev), np.exp(y_pred_log[-1] - std_dev)
 s2_u, s2_d = np.exp(y_pred_log[-1] + 2*std_dev), np.exp(y_pred_log[-1] - 2*std_dev)
-signal_text, signal_color = get_trading_signal(curr, theo, s1_u, s1_d, s2_u, s2_d)
+signal_text, _ = get_trading_signal(curr, theo, s1_u, s1_d, s2_u, s2_d)
 
-# Header Compact
-st.markdown(f"### 📈 {stock_name} ({symbol}) | {get_r2_interpretation(r2)}")
-
-# Signal de trading mis en évidence
+# Header
+st.markdown(f"### 📈 {stock_name} | {get_r2_interpretation(r2)}")
 st.markdown(f"**Diagnostic :** {signal_text}")
 
-m1, m2, m3, m4 = st.columns(4)
+# Dashboard Métriques (Compact)
+m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("CAGR", f"{cagr:.2f}%")
-m2.metric("Volatilité", f"{vol:.1f}%")
-m3.metric("R²", f"{r2:.4f}")
-m4.metric("Position", f"{((curr/theo)-1)*100:+.1f}%")
+m2.metric("Vol. 10 ans", f"{vol_10y:.1f}%")
+m3.metric("Vol. 25 ans", f"{vol_hist:.1f}%")
+m4.metric("Score R²", f"{r2:.4f}")
+m5.metric("Position", f"{((curr/theo)-1)*100:+.1f}%")
 
 # Graphique
 tab1, tab2 = st.tabs(["Log", "Linéaire"])
 
 def create_plot(is_log):
     fig = go.Figure()
-    y_trend = np.exp(y_pred_log)
-    dates = df_full.index
-    
+    dates, y_trend = df_full.index, np.exp(y_pred_log)
     fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + 2*std_dev), line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.04)', line=dict(width=0), name="95%"))
+    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.04)', line=dict(width=0), name="Canal 95%"))
     fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + std_dev), line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.12)', line=dict(width=0), name="68%"))
-    
+    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.12)', line=dict(width=0), name="Canal 68%"))
     fig.add_trace(go.Scatter(x=dates, y=df_full.values, name="Prix", line=dict(color='#00D4FF', width=1.5)))
     fig.add_trace(go.Scatter(x=dates, y=y_trend, name="Trend", line=dict(color='gold', width=1, dash='dash')))
-    
     fig.update_layout(template="plotly_dark", height=400, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
     return fig
 
 tab1.plotly_chart(create_plot(True), use_container_width=True)
 tab2.plotly_chart(create_plot(False), use_container_width=True)
 
-# Seuils compacts en bas
+# Seuils compacts
 st.markdown("---")
 t = st.columns(5)
 t[0].caption("Support -2σ"); t[0].write(f"**{s2_d:.2f}**")
