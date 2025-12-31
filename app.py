@@ -4,125 +4,58 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
-from datetime import datetime
 
-# Configuration de la page
-st.set_page_config(page_title="Analyse Log-Régression CAC 40", layout="wide")
+st.set_page_config(page_title="CAC 40 Log Regression", layout="wide")
 
-st.title("📊 Analyse de Régression Logarithmique - CAC 40")
+# Liste simplifiée pour tester la stabilité
+tickers = {"LVMH": "MC.PA", "Air Liquide": "AI.PA", "TotalEnergies": "TTE.PA", "Schneider": "SU.PA", "L'Oréal": "OR.PA"}
 
-# Liste des tickers du CAC 40 (approximateurs yfinance)
-cac40_tickers = {
-    "Air Liquide": "AI.PA", "Airbus": "AIR.PA", "Alstom": "ALO.PA", "ArcelorMittal": "MT.AS",
-    "AXA": "CS.PA", "BNP Paribas": "BNP.PA", "Bouygues": "EN.PA", "Capgemini": "CAP.PA",
-    "Carrefour": "CA.PA", "Crédit Agricole": "ACA.PA", "Danone": "BN.PA", "Dassault Systèmes": "DSY.PA",
-    "Edenred": "EDEN.PA", "Engie": "ENGI.PA", "EssilorLuxottica": "EL.PA", "Eurofins Scientific": "ERF.PA",
-    "Hermès": "RMS.PA", "Kering": "KER.PA", "L'Oréal": "OR.PA", "LVMH": "MC.PA",
-    "Michelin": "ML.PA", "Orange": "ORA.PA", "Pernod Ricard": "RI.PA", "Publicis": "PUB.PA",
-    "Renault": "RNO.PA", "Safran": "SAF.PA", "Saint-Gobain": "SGO.PA", "Sanofi": "SAN.PA",
-    "Schneider Electric": "SU.PA", "Société Générale": "GLE.PA", "Stellantis": "STLAP.PA",
-    "STMicroelectronics": "STMPA.PA", "Teleperformance": "TEP.PA", "Thales": "HO.PA",
-    "TotalEnergies": "TTE.PA", "Unibail-Rodamco-Westfield": "URW.PA", "Veolia": "VIE.PA",
-    "Vinci": "DG.PA", "Vivendi": "VIV.PA", "Worldline": "WLN.PA"
-}
+st.sidebar.title("Configuration")
+name = st.sidebar.selectbox("Sélectionner une action", list(tickers.keys()))
+symbol = tickers[name]
 
-# Sidebar pour la sélection
-ticker_name = st.sidebar.selectbox("Choisissez une action :", list(cac40_tickers.keys()))
-ticker_symbol = cac40_tickers[ticker_name]
-
-# Chargement des données
 @st.cache_data
-def load_data(ticker):
+def get_data(ticker):
     df = yf.download(ticker, start="2000-01-01")
-    df.dropna(inplace=True)
-    return df
+    return df.dropna()
 
-data = load_data(ticker_symbol)
+df = get_data(symbol)
 
-if not data.empty:
-    # Préparation des données pour la régression
-    data['Days'] = np.arange(len(data))
-    X = data['Days'].values.reshape(-1, 1)
-    y = np.log(data['Close'].values)  # Passage au logarithme
+if not df.empty:
+    # Préparation des données
+    df['Days'] = np.arange(len(df))
+    X = df['Days'].values.reshape(-1, 1)
+    # On s'assure que le prix est > 0 pour le log
+    y = np.log(df['Close'].values.clip(min=0.01)) 
 
-    # Modèle de régression linéaire sur le log des prix
-    model = LinearRegression()
-    model.fit(X, y)
-    
+    # Régression
+    model = LinearRegression().fit(X, y)
     y_pred = model.predict(X)
-    std_dev = np.std(y - y_pred)
-    
-    # Calcul des métriques
     r2 = model.score(X, y)
-    
-# --- CALCUL DU CAGR SÉCURISÉ ---
+    std_dev = np.std(y - y_pred)
+
+    # Calcul CAGR sécurisé
     try:
-        start_price = float(data['Close'].iloc[0])
-        end_price = float(data['Close'].iloc[-1])
-        # Calcul du nombre d'années réelles de données
-        num_years = (data.index[-1] - data.index[0]).days / 365.25
-        
-        if start_price > 0 and num_years > 0:
-            cagr = (pow(end_price / start_price, 1 / num_years) - 1) * 100
-        else:
-            cagr = 0.0
-    except Exception:
+        years = (df.index[-1] - df.index[0]).days / 365.25
+        cagr = (pow(df['Close'].iloc[-1] / df['Close'].iloc[0], 1/years) - 1) * 100
+    except:
         cagr = 0.0
 
-    # --- AFFICHAGE DES MÉTRIQUES ---
-    col1, col2, col3 = st.columns(3)
-    
-    # Sécurité supplémentaire pour l'affichage du CAGR
-    if np.isnan(cagr) or np.isinf(cagr):
-        col1.metric("CAGR (%)", "N/A")
-    else:
-        col1.metric("CAGR (%)", f"{cagr:.2f}%")
-        
-    col2.metric("R² (Fiabilité)", f"{r2:.4f}")
-    col3.metric("Prix Actuel", f"{end_price:.2f} €")
-    
-    # Affichage des statistiques (avec sécurité sur l'affichage)
-    col1, col2, col3 = st.columns(3)
-    col1.metric("CAGR (%)", f"{cagr:.2f}%" if not np.isnan(cagr) else "N/A")
-    col2.metric("R² (Fiabilité)", f"{r2:.4f}")
-    col3.metric("Prix Actuel", f"{end_price:.2f} €")
-    # Transformation inverse pour l'affichage (Exponentielle)
-    data['Regression'] = np.exp(y_pred)
-    data['Upper_1s'] = np.exp(y_pred + std_dev)
-    data['Lower_1s'] = np.exp(y_pred - std_dev)
-    data['Upper_2s'] = np.exp(y_pred + 2 * std_dev)
-    data['Lower_2s'] = np.exp(y_pred - 2 * std_dev)
+    # Affichage
+    c1, c2 = st.columns(2)
+    c1.metric("CAGR (%)", f"{cagr:.2f}%")
+    c2.metric("R² (Fiabilité)", f"{r2:.4f}")
 
-    # Affichage des statistiques
-    col1, col2, col3 = st.columns(3)
-    col1.metric("CAGR (%)", f"{cagr:.2f}%")
-    col2.metric("R² (Fiabilité)", f"{r2:.4f}")
-    col3.metric("Prix Actuel", f"{end_price:.2f} €")
-
-    # Graphique Plotly
+    # Graphique
     fig = go.Figure()
-
-    # Bandes Sigma
-    fig.add_trace(go.Scatter(x=data.index, y=data['Upper_2s'], line=dict(color='rgba(255, 0, 0, 0.2)'), name="+2 Sigma"))
-    fig.add_trace(go.Scatter(x=data.index, y=data['Lower_2s'], line=dict(color='rgba(255, 0, 0, 0.2)'), fill='tonexty', name="-2 Sigma"))
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="Cours", line=dict(color='white')))
+    fig.add_trace(go.Scatter(x=df.index, y=np.exp(y_pred), name="Reg. Log", line=dict(color='gold')))
     
-    # Prix et Régression
-    fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name="Cours de Bourse", line=dict(color='royalblue', width=1.5)))
-    fig.add_trace(go.Scatter(x=data.index, y=data['Regression'], name="Régression Log", line=dict(color='gold', dash='dash')))
+    # Bandes Sigma 2
+    fig.add_trace(go.Scatter(x=df.index, y=np.exp(y_pred + 2*std_dev), name="+2σ", line=dict(width=0)))
+    fig.add_trace(go.Scatter(x=df.index, y=np.exp(y_pred - 2*std_dev), name="-2σ", fill='tonexty', line=dict(width=0)))
 
-    fig.update_layout(
-        title=f"Analyse Logarithmique de {ticker_name}",
-        yaxis_type="log", # Échelle logarithmique
-        xaxis_title="Années",
-        yaxis_title="Prix (Echelle Log)",
-        template="plotly_dark",
-        height=700
-    )
-
+    fig.update_layout(yaxis_type="log", template="plotly_dark", height=600)
     st.plotly_chart(fig, use_container_width=True)
-
-    # Table de données (optionnel)
-    if st.checkbox("Afficher les données brutes"):
-        st.write(data.tail())
 else:
-    st.error("Données non disponibles pour ce ticker.")
+    st.error("Erreur lors du chargement des données.")
