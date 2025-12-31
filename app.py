@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 import urllib.request
 
-st.set_page_config(page_title="Analyse Statistique Expert", layout="wide")
+st.set_page_config(page_title="Terminal Statistique Expert", layout="wide")
 
 # --- 1. RÉCUPÉRATION DES COMPOSANTS ---
 @st.cache_data(ttl=86400)
@@ -97,12 +97,13 @@ if not filtered_names:
 selected_stock = st.sidebar.selectbox(f"Valeurs ({len(filtered_names)})", filtered_names)
 symbol = base_stocks[selected_stock]
 
-# --- 4. ANALYSE ET AFFICHAGE DÉTAILLÉ ---
-df = yf.download(symbol, start="2000-01-01", progress=False)['Close']
-if isinstance(df, pd.DataFrame): df = df.iloc[:, 0]
-res = get_metrics(df)
+# --- 4. ANALYSE ET AFFICHAGE ---
+df_full = yf.download(symbol, start="2000-01-01", progress=False)['Close']
+if isinstance(df_full, pd.DataFrame): df_full = df_full.iloc[:, 0]
+res = get_metrics(df_full)
 
 if res:
+    # Calcul des zones sigma
     std_dev = np.std(np.log(res["prices"]) - res["y_pred"])
     curr, theo = res["prices"][-1], np.exp(res["y_pred"][-1])
     s1_u, s1_d = np.exp(res["y_pred"][-1] + std_dev), np.exp(res["y_pred"][-1] - std_dev)
@@ -118,83 +119,14 @@ if res:
     m4.metric("Fiabilité (R²)", f"{res['r2']:.4f}")
     m5.metric("Position / Moy.", f"{((curr/theo)-1)*100:+.1f}%")
 
-    # SECTION INTERPRÉTATION DÉTAILLÉE
+    # Guide d'interprétation
     with st.expander("🔍 Guide d'interprétation des résultats", expanded=True):
         c1, c2 = st.columns(2)
-        
         with c1:
             st.markdown("**Analyse de la Tendance :**")
-            if res['r2'] > 0.95:
-                st.info(f"💎 **Qualité Exceptionnelle** : Le titre suit sa droite avec une précision de {res['r2']*100:.1f}%. La croissance est structurelle et très prévisible.")
-            else:
-                st.info(f"✅ **Bonne Tendance** : La trajectoire long-terme est solide malgré quelques périodes de volatilité.")
+            if res['r2'] > 0.95: st.info(f"💎 **Qualité Exceptionnelle** : Précision de {res['r2']*100:.1f}%.")
+            else: st.info("✅ **Bonne Tendance** : Trajectoire long-terme solide.")
             
-            st.markdown("**Évaluation du Risque :**")
-            diff_vol = res['vol_hist'] - res['vol_10y']
-            if diff_vol > 5:
-                st.success(f"📉 **Apaisement** : La volatilité récente ({res['vol_10y']:.1f}%) est nettement plus faible que l'historique. Le titre devient plus stable avec le temps.")
-            elif diff_vol < -5:
-                st.warning(f"📈 **Nervosité** : Le titre est plus agité ces 10 dernières années que par le passé. Prudence.")
-            else:
-                st.write(f"⚖️ **Stabilité** : Le profil de risque reste constant à travers les décennies.")
-
-        with c2:
-            st.markdown("**Diagnostic de Prix :**")
-            if curr <= s2_d:
-                st.error("🔵 **ZONE D'ACHAT FORT** : L'action est à plus de 2 écart-types sous sa moyenne. Historiquement un point d'entrée rare.")
-            elif curr <= s1_d:
-                st.success("🟢 **ZONE D'ACHAT** : Le titre est décoté par rapport à sa tendance. Bon ratio risque/rendement.")
-            elif curr >= s2_u:
-                st.error("🔴 **ZONE DE SURCHAUFFE** : L'action est trop chère par rapport à sa croissance réelle. Risque de correction élevé.")
-            elif curr >= s1_u:
-                st.warning("🟠 **ZONE DE TENSION** : Le titre est en haut de canal. Il vaut mieux attendre un repli.")
-            else:
-                st.info("⚪ **ZONE NEUTRE** : Le prix est en ligne avec la valeur théorique historique.")
-
-    # Graphiques
-    tab1, tab2 = st.tabs(["📉 Vue Logarithmique (Tendance)", "📈 Vue Linéaire (Réalité)"])
-    
-    def create_plot(is_log):
-        fig = go.Figure()
-        dates, y_trend = df_full.index, np.exp(y_pred_log)
-        
-        # Couleurs harmonisées
-        color_2sigma = 'rgba(255, 215, 0, 0.05)' # Jaune très transparent
-        color_1sigma = 'rgba(255, 215, 0, 0.15)' # Jaune plus marqué
-        line_color = 'rgba(255, 215, 0, 0.3)'   # Ligne dorée subtile
-        
-        # Zone 95% (2 Sigma)
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + 2*std_dev), line=dict(color=line_color, width=0.5), showlegend=False))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - 2*std_dev), fill='tonexty', fillcolor=color_2sigma, line=dict(color=line_color, width=0.5), name="Zone 95% (2σ)"))
-        
-        # Zone 68% (1 Sigma)
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + std_dev), line=dict(color=line_color, width=0.8), showlegend=False))
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - std_dev), fill='tonexty', fillcolor=color_1sigma, line=dict(color=line_color, width=0.8), name="Zone 68% (1σ)"))
-        
-        # Prix Réel
-        fig.add_trace(go.Scatter(x=dates, y=res["prices"], name="Prix Réel", line=dict(color='#00D4FF', width=1.8)))
-        
-        # Droite de Régression (Centrale)
-        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp), name="Tendance Centrale", line=dict(color='gold', width=2, dash='dash')))
-        
-        fig.update_layout(
-            template="plotly_dark", 
-            height=450, 
-            yaxis_type="log" if is_log else "linear", 
-            margin=dict(l=0,r=0,t=10,b=0), 
-            legend=dict(orientation="h", y=-0.15)
-        )
-    return fig
-    
-    tab1.plotly_chart(create_plot(True), use_container_width=True)
-    tab2.plotly_chart(create_plot(False), use_container_width=True)
-
-    # Niveaux de prix précis
-    st.markdown("---")
-    st.markdown("#### 🎯 Objectifs de prix basés sur l'historique")
-    t = st.columns(5)
-    t[0].metric("Support Extrême", f"{s2_d:.2f} €", "-2σ")
-    t[1].metric("Support Normal", f"{s1_d:.2f} €", "-1σ")
-    t[2].metric("PRIX THÉORIQUE", f"{theo:.2f} €", "Moyenne")
-    t[3].metric("Résistance Normale", f"{s1_u:.2f} €", "+1σ")
-    t[4].metric("Résistance Extrême", f"{s2_u:.2f} €", "+2σ")
+            st.markdown("**Risque :**")
+            if (res['vol_hist'] - res['vol_10y']) > 5: st.success("📉 **Apaisement** : Plus stable récemment.")
+            else
