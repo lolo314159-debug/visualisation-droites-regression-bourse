@@ -129,4 +129,48 @@ if res:
             
             st.markdown("**Risque :**")
             if (res['vol_hist'] - res['vol_10y']) > 5: st.success("📉 **Apaisement** : Plus stable récemment.")
-            else
+            else: st.write("⚖️ **Stabilité** : Risque constant.")
+        with c2:
+            st.markdown("**Diagnostic de Prix :**")
+            if curr <= s2_d: st.error("🔵 **ACHAT FORT** (-2σ)")
+            elif curr <= s1_d: st.success("🟢 **ACHAT** (-1σ)")
+            elif curr >= s2_u: st.error("🔴 **SURCHAUFFE** (+2σ)")
+            elif curr >= s1_u: st.warning("🟠 **TENSION** (+1σ)")
+            else: st.info("⚪ **ZONE NEUTRE**")
+
+    # GRAPHIQUES AVEC COULEURS HARMONISÉES
+    tab1, tab2 = st.tabs(["📉 Vue Logarithmique", "📈 Vue Linéaire"])
+    
+    def create_plot(is_log):
+        fig = go.Figure()
+        dates, yp = df_full.index, res["y_pred"]
+        
+        # Couleurs des zones et lignes (Même teinte)
+        c2_fill, c1_fill = 'rgba(255, 215, 0, 0.05)', 'rgba(255, 215, 0, 0.15)'
+        line_style = dict(color='rgba(255, 215, 0, 0.2)', width=0.5)
+
+        # Tracé des zones Sigma
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + 2*std_dev), line=line_style, showlegend=False))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - 2*std_dev), fill='tonexty', fillcolor=c2_fill, line=line_style, name="Zone 95% (2σ)"))
+        
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp + std_dev), line=line_style, showlegend=False))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp - std_dev), fill='tonexty', fillcolor=c1_fill, line=line_style, name="Zone 68% (1σ)"))
+        
+        # Prix et Tendance
+        fig.add_trace(go.Scatter(x=dates, y=res["prices"], name="Prix Réel", line=dict(color='#00D4FF', width=1.8)))
+        fig.add_trace(go.Scatter(x=dates, y=np.exp(yp), name="Trend", line=dict(color='gold', width=2, dash='dash')))
+        
+        fig.update_layout(template="plotly_dark", height=450, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
+        return fig
+    
+    tab1.plotly_chart(create_plot(True), use_container_width=True)
+    tab2.plotly_chart(create_plot(False), use_container_width=True)
+
+    # Niveaux de prix metrics
+    st.markdown("---")
+    t = st.columns(5)
+    t[0].metric("Support -2σ", f"{s2_d:.2f} €")
+    t[1].metric("Support -1σ", f"{s1_d:.2f} €")
+    t[2].metric("PRIX THÉORIQUE", f"{theo:.2f} €")
+    t[3].metric("Résistance +1σ", f"{s1_u:.2f} €")
+    t[4].metric("Résistance +2σ", f"{s2_u:.2f} €")
