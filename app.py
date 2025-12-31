@@ -35,127 +35,103 @@ def get_index_components(index_name):
                 stocks[name] += info["suffix"]
         return stocks, info["bench"]
     except Exception as e:
-        st.error(f"Erreur Wikipedia : {e}")
         return {"Air Liquide": "AI.PA"}, "^FCHI"
 
 # --- 2. FONCTIONS STATISTIQUES ---
 def get_metrics(prices_series):
     prices = prices_series.dropna().values.astype(float)
-    if len(prices) < 100: return 0.0, 0.0, 0.0, None
-    
-    # Régression Log-Linéaire
+    if len(prices) < 50: return 0.0, 0.0, 0.0, None
     x = np.arange(len(prices)).reshape(-1, 1)
     y_log = np.log(np.maximum(prices, 0.01))
     model = LinearRegression().fit(x, y_log)
     y_pred_log = model.predict(x).flatten()
     r2 = model.score(x, y_log)
-    
-    # Volatilité Annualisée
     returns = np.diff(y_log)
     vol = np.std(returns) * np.sqrt(252) * 100
-    
-    # CAGR
     years = len(prices) / 252
     cagr = (pow(prices[-1] / prices[0], 1/years) - 1) * 100 if years > 0 else 0
-    
     return r2, vol, cagr, y_pred_log
 
-def get_r2_interpretation(value):
-    if value > 0.95: return "🌟 **Exceptionnelle** : Croissance quasi-parfaite."
-    if value > 0.90: return "🌟 **Excellente** : Trajectoire très régulière."
-    if value > 0.80: return "✅ **Bonne** : Tendance de fond solide."
-    if value > 0.65: return "⚠️ **Moyenne** : Volatilité importante."
-    return "❌ **Faible** : Le modèle log-linéaire n'est pas adapté."
+def get_r2_interpretation(v):
+    if v > 0.98: return "💎 **Diamant** : Modèle de régularité absolue."
+    if v > 0.93: return "🌟 **Exceptionnel** : Croissance prévisible et stable."
+    if v > 0.85: return "✅ **Très Bon** : Tendance de fond robuste."
+    if v > 0.70: return "⚠️ **Correct** : Présence de cycles ou volatilité."
+    return "❌ **Spéculatif** : Faible corrélation temporelle."
 
-# --- 3. FILTRAGE IDENTIQUE À L'HISTORIQUE ---
+# --- 3. FILTRAGE ET INTERFACE ---
+st.sidebar.title("⚙️ Filtres")
+idx_choice = st.sidebar.selectbox("Indice", ["CAC 40 (France)", "DAX (Allemagne)", "EURO STOXX 50", "IBEX 35 (Espagne)", "FTSE 100 (UK)"])
+r2_min = st.sidebar.slider("R² min (Historique)", 0.0, 1.0, 0.90, 0.01)
+
+base_stocks, bench_ticker = get_index_components(idx_choice)
+
 @st.cache_data(ttl=3600)
 def get_strictly_filtered_list(stocks_dict, r2_threshold):
     tickers = list(stocks_dict.values())
-    # Téléchargement de l'historique COMPLET pour que le filtre soit identique à la droite
     data = yf.download(tickers, start="2000-01-01", interval="1wk", progress=False)['Close']
-    
     results = []
     for name, ticker in stocks_dict.items():
         if ticker in data.columns:
             r2_val, _, _, _ = get_metrics(data[ticker])
             if r2_val >= r2_threshold:
                 results.append({"name": name, "r2": r2_val})
-    
-    # Tri par R2 décroissant
-    sorted_results = sorted(results, key=lambda x: x['r2'], reverse=True)
-    return [item['name'] for item in sorted_results]
+    return [item['name'] for item in sorted(results, key=lambda x: x['r2'], reverse=True)]
 
-# --- 4. INTERFACE ---
-st.sidebar.title("🛠 Stratégie")
-idx_choice = st.sidebar.selectbox("1. Indice", ["CAC 40 (France)", "DAX (Allemagne)", "EURO STOXX 50", "IBEX 35 (Espagne)", "FTSE 100 (UK)"])
-r2_min = st.sidebar.slider("2. R² minimum (Historique complet)", 0.0, 1.0, 0.90, 0.01)
+filtered_names = get_strictly_filtered_list(base_stocks, r2_min)
 
-base_stocks, bench_ticker = get_index_components(idx_choice)
+if not filtered_names:
+    st.sidebar.error("Aucun résultat.")
+    st.stop()
 
-with st.sidebar:
-    st.write("---")
-    with st.spinner("Analyse complète (depuis 2000)..."):
-        filtered_names = get_strictly_filtered_list(base_stocks, r2_min)
-    
-    if filtered_names:
-        stock_name = st.selectbox(f"3. Valeurs éligibles ({len(filtered_names)})", filtered_names)
-        symbol = base_stocks[stock_name]
-    else:
-        st.error("Aucune action ne correspond à ce critère sur l'historique complet.")
-        st.stop()
+stock_name = st.sidebar.selectbox(f"Valeurs ({len(filtered_names)})", filtered_names)
+symbol = base_stocks[stock_name]
 
-# --- 5. ANALYSE DÉTAILLÉE ---
+# --- 4. ANALYSE ET AFFICHAGE ---
 df_full = yf.download(symbol, start="2000-01-01", progress=False)['Close']
 if isinstance(df_full, pd.DataFrame): df_full = df_full.iloc[:, 0]
 
 r2, vol, cagr, y_pred_log = get_metrics(df_full)
 std_dev = np.std(np.log(df_full.values) - y_pred_log)
+curr, theo = df_full.iloc[-1], np.exp(y_pred_log[-1])
 
-curr = df_full.iloc[-1]
-theo = np.exp(y_pred_log[-1])
-s1_u, s1_d = np.exp(y_pred_log[-1] + std_dev), np.exp(y_pred_log[-1] - std_dev)
-s2_u, s2_d = np.exp(y_pred_log[-1] + 2*std_dev), np.exp(y_pred_log[-1] - 2*std_dev)
+# Header Compact
+st.markdown(f"### 📈 {stock_name} ({symbol}) | {get_r2_interpretation(r2)}")
 
-# --- 6. AFFICHAGE ---
-st.title(f"🚀 {stock_name} ({symbol})")
-st.info(f"**Qualité de tendance (R² = {r2:.4f})** : {get_r2_interpretation(r2)}")
-
-# Dashboard Métriques (CAGR en premier)
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("CAGR (Annuel)", f"{cagr:.2f} %")
-m2.metric("Volatilité Ann.", f"{vol:.2f} %")
-m3.metric("Prix Actuel", f"{curr:.2f} €")
-m4.metric("Position / Moyenne", f"{((curr/theo)-1)*100:+.2f}%")
+m1.metric("CAGR", f"{cagr:.2f}%")
+m2.metric("Volatilité", f"{vol:.1f}%")
+m3.metric("R²", f"{r2:.4f}")
+m4.metric("Position", f"{((curr/theo)-1)*100:+.1f}%")
 
-# Niveaux Sigma
-st.markdown("### 🎯 Niveaux de valorisation actuels")
-t1, t2, t3, t4, t5 = st.columns(5)
-t1.metric("Support -2σ", f"{s2_d:.2f}")
-t2.metric("Support -1σ", f"{s1_d:.2f}")
-t3.metric("PRIX THÉORIQUE", f"{theo:.2f}")
-t4.metric("Résistance +1σ", f"{s1_u:.2f}")
-t5.metric("Résistance +2σ", f"{s2_u:.2f}")
-
-# Graphiques
-tab1, tab2 = st.tabs(["📉 Échelle Logarithmique", "📈 Échelle Arithmétique"])
+# Graphique
+tab1, tab2 = st.tabs(["Log", "Linéaire"])
 
 def create_plot(is_log):
     fig = go.Figure()
-    dates = df_full.index
     y_trend = np.exp(y_pred_log)
+    dates = df_full.index
     
-    # Bandes Sigma
+    # Zones Sigma
     fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + 2*std_dev), line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.05)', line=dict(width=0), name="Canal 2σ (95%)"))
+    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - 2*std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.04)', line=dict(width=0), name="95%"))
     fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log + std_dev), line=dict(width=0), showlegend=False))
-    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.12)', line=dict(width=0), name="Canal 1σ (68%)"))
+    fig.add_trace(go.Scatter(x=dates, y=np.exp(y_pred_log - std_dev), fill='tonexty', fillcolor='rgba(255, 215, 0, 0.12)', line=dict(width=0), name="68%"))
     
-    fig.add_trace(go.Scatter(x=dates, y=df_full.values, name="Cours réel", line=dict(color='#00D4FF', width=2)))
-    fig.add_trace(go.Scatter(x=dates, y=y_trend, name="Régression", line=dict(color='gold', width=1.5, dash='dash')))
+    fig.add_trace(go.Scatter(x=dates, y=df_full.values, name="Prix", line=dict(color='#00D4FF', width=1.5)))
+    fig.add_trace(go.Scatter(x=dates, y=y_trend, name="Trend", line=dict(color='gold', width=1, dash='dash')))
     
-    fig.update_layout(template="plotly_dark", height=600, yaxis_type="log" if is_log else "linear", 
-                      margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.1))
+    fig.update_layout(template="plotly_dark", height=450, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=-0.15))
     return fig
 
 tab1.plotly_chart(create_plot(True), use_container_width=True)
 tab2.plotly_chart(create_plot(False), use_container_width=True)
+
+# Seuils en dessous
+st.markdown("---")
+t = st.columns(5)
+t[0].caption("Support -2σ"); t[0].write(f"**{np.exp(y_pred_log[-1] - 2*std_dev):.2f}**")
+t[1].caption("Support -1σ"); t[1].write(f"**{np.exp(y_pred_log[-1] - std_dev):.2f}**")
+t[2].caption("THÉORIQUE"); t[2].write(f"**{theo:.2f}**")
+t[3].caption("Résistance +1σ"); t[3].write(f"**{np.exp(y_pred_log[-1] + std_dev):.2f}**")
+t[4].caption("Résistance +2σ"); t[4].write(f"**{np.exp(y_pred_log[-1] + 2*std_dev):.2f}**")
