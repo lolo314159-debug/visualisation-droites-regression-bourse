@@ -55,12 +55,25 @@ if not data.empty:
     # Calcul des métriques
     r2 = model.score(X, y)
     
-    # Calcul du CAGR
-    start_price = data['Close'].iloc[0]
-    end_price = data['Close'].iloc[-1]
-    num_years = (data.index[-1] - data.index[0]).days / 365.25
-    cagr = (pow(end_price / start_price, 1 / num_years) - 1) * 100
+    
+# Calcul du CAGR sécurisé
+    try:
+        start_price = float(data['Close'].iloc[0])
+        end_price = float(data['Close'].iloc[-1])
+        num_years = (data.index[-1] - data.index[0]).days / 365.25
+        
+        if start_price > 0 and num_years > 0:
+            cagr = (pow(end_price / start_price, 1 / num_years) - 1) * 100
+        else:
+            cagr = 0.0
+    except:
+        cagr = 0.0
 
+    # Affichage des statistiques (avec sécurité sur l'affichage)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("CAGR (%)", f"{cagr:.2f}%" if not np.isnan(cagr) else "N/A")
+    col2.metric("R² (Fiabilité)", f"{r2:.4f}")
+    col3.metric("Prix Actuel", f"{end_price:.2f} €")
     # Transformation inverse pour l'affichage (Exponentielle)
     data['Regression'] = np.exp(y_pred)
     data['Upper_1s'] = np.exp(y_pred + std_dev)
