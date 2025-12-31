@@ -80,4 +80,42 @@ if not df_all.empty and symbol in df_all.columns:
 
     m1, m2, m3 = st.columns(3)
     years = (df_all.index[-1] - df_all.index[0]).days / 365.25
-    cagr = (pow(prices[-1] / prices[0], 1
+    cagr = (pow(prices[-1] / prices[0], 1/years) - 1) * 100
+    m1.metric("CAGR moyen", f"{cagr:.2f}%")
+    m2.metric("Volatilité (Ecart-type)", f"{std_dev:.4f}")
+    m3.metric("Dernier Prix", f"{prices[-1]:.2f} €")
+
+    # --- 4. GRAPHIQUES ---
+    tab1, tab2 = st.tabs(["📉 Échelle Logarithmique", "📈 Échelle Arithmétique"])
+
+    def create_fig(is_log):
+        fig = go.Figure()
+        
+        # Calcul des bandes
+        y_trend = np.exp(y_pred_log)
+        u1, l1 = np.exp(y_pred_log + std_dev), np.exp(y_pred_log - std_dev)
+        u2, l2 = np.exp(y_pred_log + 2*std_dev), np.exp(y_pred_log - 2*std_dev)
+        
+        # Tracé des zones Sigma
+        fig.add_trace(go.Scatter(x=df_all.index, y=u2, line=dict(width=0), showlegend=False))
+        fig.add_trace(go.Scatter(x=df_all.index, y=l2, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.05)', line=dict(width=0), name="Bandes +/- 2σ (95%)"))
+        
+        fig.add_trace(go.Scatter(x=df_all.index, y=u1, line=dict(width=0), showlegend=False))
+        fig.add_trace(go.Scatter(x=df_all.index, y=l1, fill='tonexty', fillcolor='rgba(255, 215, 0, 0.15)', line=dict(width=0), name="Bandes +/- 1σ (68%)"))
+        
+        # Indice de référence
+        bench_prices = df_all[bench_ticker].values
+        ratio = prices[0] / bench_prices[0]
+        fig.add_trace(go.Scatter(x=df_all.index, y=bench_prices * ratio, name="Indice (normalisé)", line=dict(color='rgba(255,255,255,0.2)', width=1, dash='dot')))
+        
+        # Action et Régression
+        fig.add_trace(go.Scatter(x=df_all.index, y=prices, name="Prix Action", line=dict(color='#00D4FF', width=2)))
+        fig.add_trace(go.Scatter(x=df_all.index, y=y_trend, name="Régression", line=dict(color='gold', width=1.5, dash='dash')))
+        
+        fig.update_layout(template="plotly_dark", height=550, yaxis_type="log" if is_log else "linear", margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", y=-0.1))
+        return fig
+
+    tab1.plotly_chart(create_fig(True), use_container_width=True)
+    tab2.plotly_chart(create_fig(False), use_container_width=True)
+else:
+    st.error("Données indisponibles.")
