@@ -71,7 +71,7 @@ def get_metrics(prices_series):
 # --- 3. INTERFACE AVEC FILTRES PAR INTERVALLES ---
 st.sidebar.title("⚙️ Paramètres")
 cat = st.sidebar.radio("Catégorie", ["Continentaux", "Par Pays"])
-idx_list = ["EURO STOXX 50", "STOXX Europe 600"] if cat == "Continentaux" else ["CAC 40 (France)", "DAX 40 (Allemagne)", "FTSE 100 (UK)", "SMI 20 (Suisse)", "AEX (Pays-Bas)", "IBEX 35 (Espagne)", "BEL 20 (Belgique)"]
+idx_list = ["EURO STOXX 50", "STOXX Europe 600"] if cat == "Continentaux" else ["CAC 40 (France)", "DAX 40 (Allemagne)", "FTSE 100 (UK)", "SMI 20 (Suisse)", "AEX (Pays-Bas)", "IBEX 35 (Espagne)", "BEL 20 (Belgique)","FTSE MIB (Italie)"]
 idx_choice = st.sidebar.selectbox("Indice", idx_list)
 
 # NOUVEAUX FILTRES PAR INTERVALLE
